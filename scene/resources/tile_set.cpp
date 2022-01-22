@@ -31,6 +31,9 @@
 #include "tile_set.h"
 #include "core/array.h"
 #include "core/engine.h"
+#include "core/pair.h"
+#include "core/sort_array.h"
+#include "core/vector.h"
 
 bool TileSet::_set(const StringName &p_name, const Variant &p_value) {
 	String n = p_name;
@@ -589,6 +592,54 @@ const Map<Vector2, uint32_t> &TileSet::autotile_get_bitmask_map(int p_id) {
 	}
 }
 
+List<Vector2> TileSet::_autotile_get_subtile_candidates_for_bitmask(int p_id, uint16_t p_bitmask) const {
+	List<Vector2> coords;
+	uint32_t mask;
+	uint16_t mask_;
+	uint16_t mask_ignore;
+	for (Map<Vector2, uint32_t>::Element *E = tile_map[p_id].autotile_data.flags.front(); E; E = E->next()) {
+		mask = E->get();
+		if (tile_map[p_id].autotile_data.bitmask_mode == BITMASK_2X2) {
+			mask |= (BIND_IGNORE_TOP | BIND_IGNORE_LEFT | BIND_IGNORE_CENTER | BIND_IGNORE_RIGHT | BIND_IGNORE_BOTTOM);
+		}
+
+		mask_ = mask & 0xFFFF;
+		mask_ignore = mask >> 16;
+
+		if (((mask_ & (~mask_ignore)) == (p_bitmask & (~mask_ignore))) && (((~mask_) | mask_ignore) == ((~p_bitmask) | mask_ignore))) {
+			coords.push_back(E->key());
+		}
+	}
+	return coords;
+}
+
+struct _BitcountSorter {
+	uint32_t bitmask = 0;
+	bool operator()(const uint32_t &a, const uint32_t &b) const {
+		int32_t difference = int32_t(bitcount(a ^ bitmask, false)) - int32_t(bitcount(b ^ bitmask, false));
+		if (difference != 0) {
+			// if bitmasks have different "distance" score, sort accordingly
+			return difference < 0;
+		} else {
+			// if same, pick one with more enabled bits
+			return bitcount(a, true) > bitcount(b, true);
+		}
+	}
+	uint32_t bitcount(uint32_t x, bool raw) const {
+		uint32_t ret = 0;
+		for (uint32_t i = 1; i <= 256; i <<= 1) {
+			if (x & i) {
+				ret++;
+				// make axial edges have double the influence, but only during the difference test
+				if (!raw && i & (TileSet::BIND_TOP | TileSet::BIND_LEFT | TileSet::BIND_RIGHT | TileSet::BIND_BOTTOM)) {
+					ret++;
+				}
+			}
+		}
+		return ret;
+	}
+};
+
 Vector2 TileSet::autotile_get_subtile_for_bitmask(int p_id, uint16_t p_bitmask, const Node *p_tilemap_node, const Vector2 &p_tile_location) {
 	ERR_FAIL_COND_V_MSG(!tile_map.has(p_id), Vector2(), vformat("The TileSet doesn't have a tile with ID '%d'.", p_id));
 	//First try to forward selection to script
@@ -603,32 +654,45 @@ Vector2 TileSet::autotile_get_subtile_for_bitmask(int p_id, uint16_t p_bitmask, 
 		}
 	}
 
-	List<Vector2> coords;
-	List<uint32_t> priorities;
-	uint32_t priority_sum = 0;
-	uint32_t mask;
-	uint16_t mask_;
-	uint16_t mask_ignore;
-	for (Map<Vector2, uint32_t>::Element *E = tile_map[p_id].autotile_data.flags.front(); E; E = E->next()) {
-		mask = E->get();
-		if (tile_map[p_id].autotile_data.bitmask_mode == BITMASK_2X2) {
-			mask |= (BIND_IGNORE_TOP | BIND_IGNORE_LEFT | BIND_IGNORE_CENTER | BIND_IGNORE_RIGHT | BIND_IGNORE_BOTTOM);
+	List<Vector2> coords = _autotile_get_subtile_candidates_for_bitmask(p_id, p_bitmask);
+
+	// if we didn't find anything, try falling back to a tile with a similar bitmask instead of the default tile
+	if (coords.size() == 0) {
+		// build list of possibilities (second half of pair is a dummy value to smuggle p_bitmask into the sorting comparator)
+		Vector<uint32_t> possibilities;
+		possibilities.push_back(BIND_CENTER);
+		uint32_t edges[] = { BIND_TOPLEFT, BIND_TOPRIGHT, BIND_BOTTOMLEFT, BIND_BOTTOMRIGHT, BIND_TOP, BIND_LEFT, BIND_RIGHT, BIND_BOTTOM };
+		for (uint32_t edge : edges) {
+			int num = possibilities.size();
+			for (int i = 0; i < num; ++i) {
+				possibilities.push_back(possibilities[i] | edge);
+			}
 		}
+		// get most similar/desirable possibilities first
+		SortArray<uint32_t, _BitcountSorter> sorter;
+		sorter.compare.bitmask = p_bitmask;
+		sorter.insertion_sort(0, possibilities.size(), possibilities.ptrw());
 
-		mask_ = mask & 0xFFFF;
-		mask_ignore = mask >> 16;
-
-		if (((mask_ & (~mask_ignore)) == (p_bitmask & (~mask_ignore))) && (((~mask_) | mask_ignore) == ((~p_bitmask) | mask_ignore))) {
-			uint32_t priority = autotile_get_subtile_priority(p_id, E->key());
-			priority_sum += priority;
-			priorities.push_back(priority);
-			coords.push_back(E->key());
+		// search sorted list of possibilities for first (and thus most) similar valid bitmask
+		for (int i = 0; i < possibilities.size(); ++i) {
+			coords = _autotile_get_subtile_candidates_for_bitmask(p_id, possibilities[i]);
+			if (coords.size() != 0) {
+				break;
+			}
 		}
 	}
 
 	if (coords.size() == 0) {
 		return autotile_get_icon_coordinate(p_id);
 	} else {
+		List<uint32_t> priorities;
+		uint32_t priority_sum = 0;
+		for (List<Vector2>::Element *E = coords.front(); E; E = E->next()) {
+			uint32_t priority = autotile_get_subtile_priority(p_id, E->get());
+			priority_sum += priority;
+			priorities.push_back(priority);
+		}
+
 		uint32_t picked_value = Math::rand() % priority_sum;
 		uint32_t upper_bound;
 		uint32_t lower_bound = 0;

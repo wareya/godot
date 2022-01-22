@@ -144,6 +144,7 @@ protected:
 	Array _tile_get_shapes(int p_id) const;
 	Array _get_tiles_ids() const;
 	void _decompose_convex_shape(Ref<Shape2D> p_shape);
+	List<Vector2> _autotile_get_subtile_candidates_for_bitmask(int p_id, uint16_t p_bitmask) const;
 
 	static void _bind_methods();
 
