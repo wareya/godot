@@ -616,7 +616,7 @@ List<Vector2> TileSet::_autotile_get_subtile_candidates_for_bitmask(int p_id, ui
 struct _BitcountSorter {
 	uint32_t bitmask = 0;
 	bool operator()(const uint32_t &a, const uint32_t &b) const {
-		int32_t difference = int32_t(bitcount(a ^ bitmask, false)) - int32_t(bitcount(b ^ bitmask, false));
+		int32_t difference = int32_t(bitcount(a, false)) - int32_t(bitcount(b, false));
 		if (difference != 0) {
 			// if bitmasks have different "distance" score, sort accordingly
 			return difference < 0;
@@ -627,6 +627,9 @@ struct _BitcountSorter {
 	}
 	uint32_t bitcount(uint32_t x, bool raw) const {
 		uint32_t ret = 0;
+		if (!raw) {
+			x ^= bitmask;
+		}
 		for (uint32_t i = 1; i <= 256; i <<= 1) {
 			if (x & i) {
 				ret++;
@@ -635,6 +638,21 @@ struct _BitcountSorter {
 					ret++;
 				}
 			}
+		}
+		x ^= bitmask;
+		// artificially inflate score (reduce distance) for all-filled and all-but-center-empty bitmasks
+		// (511 is the non-IGNORE bitmasks all or'd together)
+		if (!raw && ret > 0 && (x == 511 || x == TileSet::BIND_CENTER)) {
+			ret--;
+		}
+		// artificially deflate score (increase distance) for non-symmetric bitmasks if testing against all-filled or all-but-center-empty bitmask
+		// (need to cast the bit tests from int to bool before comparing)
+		if (!raw && (bitmask == 511 || bitmask == TileSet::BIND_CENTER) &&
+				(bool(x & TileSet::BIND_LEFT) != bool(x & TileSet::BIND_RIGHT) ||
+						bool(x & TileSet::BIND_TOP) != bool(x & TileSet::BIND_BOTTOM) ||
+						bool(x & TileSet::BIND_TOPRIGHT) != bool(x & TileSet::BIND_BOTTOMLEFT) ||
+						bool(x & TileSet::BIND_TOPLEFT) != bool(x & TileSet::BIND_BOTTOMRIGHT))) {
+			ret += 16;
 		}
 		return ret;
 	}
