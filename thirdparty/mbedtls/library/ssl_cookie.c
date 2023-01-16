@@ -25,12 +25,7 @@
 
 #if defined(MBEDTLS_SSL_COOKIE_C)
 
-#if defined(MBEDTLS_PLATFORM_C)
 #include "mbedtls/platform.h"
-#else
-#define mbedtls_calloc    calloc
-#define mbedtls_free      free
-#endif
 
 #include "mbedtls/ssl_cookie.h"
 #include "mbedtls/ssl_internal.h"
@@ -63,7 +58,7 @@
 
 /*
  * Cookies are formed of a 4-bytes timestamp (or serial number) and
- * an HMAC of timestemp and client ID.
+ * an HMAC of timestamp and client ID.
  */
 #define COOKIE_LEN      ( 4 + COOKIE_HMAC_LEN )
 
@@ -122,6 +117,7 @@ int mbedtls_ssl_cookie_setup( mbedtls_ssl_cookie_ctx *ctx,
 /*
  * Generate the HMAC part of a cookie
  */
+MBEDTLS_CHECK_RETURN_CRITICAL
 static int ssl_cookie_hmac( mbedtls_md_context_t *hmac_ctx,
                             const unsigned char time[4],
                             unsigned char **p, unsigned char *end,

@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  os_windows.cpp                                                       */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  os_windows.cpp                                                        */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "os_windows.h"
 
@@ -73,6 +73,12 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 typedef struct {
 	int count;
 	int screen;
+	HMONITOR monitor;
+} EnumScreenData;
+
+typedef struct {
+	int count;
+	int screen;
 	Size2 size;
 } EnumSizeData;
 
@@ -81,6 +87,16 @@ typedef struct {
 	int screen;
 	Point2 pos;
 } EnumPosData;
+
+static BOOL CALLBACK _MonitorEnumProcScreen(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
+	EnumScreenData *data = (EnumScreenData *)dwData;
+	if (data->monitor == hMonitor) {
+		data->screen = data->count;
+	}
+
+	data->count++;
+	return TRUE;
+}
 
 static BOOL CALLBACK _MonitorEnumProcSize(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
 	EnumSizeData *data = (EnumSizeData *)dwData;
@@ -107,15 +123,23 @@ static String format_error_message(DWORD id) {
 
 extern HINSTANCE godot_hinstance;
 
+void RedirectStream(const char *p_file_name, const char *p_mode, FILE *p_cpp_stream, const DWORD p_std_handle) {
+	const HANDLE h_existing = GetStdHandle(p_std_handle);
+	if (h_existing != INVALID_HANDLE_VALUE) { // Redirect only if attached console have a valid handle.
+		const HANDLE h_cpp = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(p_cpp_stream)));
+		if (h_cpp == INVALID_HANDLE_VALUE) { // Redirect only if it's not already redirected to the pipe or file.
+			FILE *fp = p_cpp_stream;
+			freopen_s(&fp, p_file_name, p_mode, p_cpp_stream); // Redirect stream.
+			setvbuf(p_cpp_stream, nullptr, _IONBF, 0); // Disable stream buffering.
+		}
+	}
+}
+
 void RedirectIOToConsole() {
 	if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-		FILE *fpstdin = stdin;
-		FILE *fpstdout = stdout;
-		FILE *fpstderr = stderr;
-
-		freopen_s(&fpstdin, "CONIN$", "r", stdin);
-		freopen_s(&fpstdout, "CONOUT$", "w", stdout);
-		freopen_s(&fpstderr, "CONOUT$", "w", stderr);
+		RedirectStream("CONIN$", "r", stdin, STD_INPUT_HANDLE);
+		RedirectStream("CONOUT$", "w", stdout, STD_OUTPUT_HANDLE);
+		RedirectStream("CONOUT$", "w", stderr, STD_ERROR_HANDLE);
 
 		printf("\n"); // Make sure our output is starting from the new line.
 	}
@@ -158,7 +182,9 @@ void OS_Windows::initialize_core() {
 	last_button_state = 0;
 	restore_mouse_trails = 0;
 
+#ifndef WINDOWS_SUBSYSTEM_CONSOLE
 	RedirectIOToConsole();
+#endif
 
 	maximized = false;
 	minimized = false;
@@ -228,6 +254,41 @@ void OS_Windows::_touch_event(bool p_pressed, float p_x, float p_y, int idx) {
 		input->parse_input_event(event);
 	}
 };
+
+bool OS_Windows::tts_is_speaking() const {
+	ERR_FAIL_COND_V(!tts, false);
+	return tts->is_speaking();
+}
+
+bool OS_Windows::tts_is_paused() const {
+	ERR_FAIL_COND_V(!tts, false);
+	return tts->is_paused();
+}
+
+Array OS_Windows::tts_get_voices() const {
+	ERR_FAIL_COND_V(!tts, Array());
+	return tts->get_voices();
+}
+
+void OS_Windows::tts_speak(const String &p_text, const String &p_voice, int p_volume, float p_pitch, float p_rate, int p_utterance_id, bool p_interrupt) {
+	ERR_FAIL_COND(!tts);
+	tts->speak(p_text, p_voice, p_volume, p_pitch, p_rate, p_utterance_id, p_interrupt);
+}
+
+void OS_Windows::tts_pause() {
+	ERR_FAIL_COND(!tts);
+	tts->pause();
+}
+
+void OS_Windows::tts_resume() {
+	ERR_FAIL_COND(!tts);
+	tts->resume();
+}
+
+void OS_Windows::tts_stop() {
+	ERR_FAIL_COND(!tts);
+	tts->stop();
+}
 
 void OS_Windows::_drag_event(float p_x, float p_y, int idx) {
 	Map<int, Vector2>::Element *curr = touch_state.find(idx);
@@ -397,7 +458,6 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 
 				mm->set_position(c);
 				mm->set_global_position(c);
-				input->set_mouse_position(c);
 				mm->set_speed(Vector2(0, 0));
 
 				if (raw->data.mouse.usFlags == MOUSE_MOVE_RELATIVE) {
@@ -465,13 +525,16 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 						last_tilt = Vector2();
 					}
 
+					last_pen_inverted = packet.pkStatus & TPS_INVERT;
+
 					POINT coords;
 					GetCursorPos(&coords);
 					ScreenToClient(hWnd, &coords);
 
 					// Don't calculate relative mouse movement if we don't have focus in CAPTURED mode.
-					if (!window_has_focus && mouse_mode == MOUSE_MODE_CAPTURED)
+					if (!window_has_focus && mouse_mode == MOUSE_MODE_CAPTURED) {
 						break;
+					}
 
 					Ref<InputEventMouseMotion> mm;
 					mm.instance();
@@ -479,6 +542,7 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 					mm->set_shift(GetKeyState(VK_SHIFT) < 0);
 					mm->set_alt(alt_mem);
 
+					mm->set_pen_inverted(last_pen_inverted);
 					mm->set_pressure(last_pressure);
 					mm->set_tilt(last_tilt);
 
@@ -504,7 +568,6 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 						SetCursorPos(pos.x, pos.y);
 					}
 
-					input->set_mouse_position(mm->get_position());
 					mm->set_speed(input->get_last_mouse_speed());
 
 					if (old_invalid) {
@@ -601,11 +664,14 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 			}
 
 			// Don't calculate relative mouse movement if we don't have focus in CAPTURED mode.
-			if (!window_has_focus && mouse_mode == MOUSE_MODE_CAPTURED)
+			if (!window_has_focus && mouse_mode == MOUSE_MODE_CAPTURED) {
 				break;
+			}
 
 			Ref<InputEventMouseMotion> mm;
 			mm.instance();
+
+			mm->set_pen_inverted(pen_info.penFlags & (PEN_FLAG_INVERTED | PEN_FLAG_ERASER));
 
 			if (pen_info.penMask & PEN_MASK_PRESSURE) {
 				mm->set_pressure((float)pen_info.pressure / 1024);
@@ -648,7 +714,6 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 				SetCursorPos(pos.x, pos.y);
 			}
 
-			input->set_mouse_position(mm->get_position());
 			mm->set_speed(input->get_last_mouse_speed());
 
 			if (old_invalid) {
@@ -702,8 +767,9 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 			}
 
 			// Don't calculate relative mouse movement if we don't have focus in CAPTURED mode.
-			if (!window_has_focus && mouse_mode == MOUSE_MODE_CAPTURED)
+			if (!window_has_focus && mouse_mode == MOUSE_MODE_CAPTURED) {
 				break;
+			}
 
 			Ref<InputEventMouseMotion> mm;
 			mm.instance();
@@ -719,14 +785,17 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 				} else {
 					last_tilt = Vector2();
 					last_pressure = (wParam & MK_LBUTTON) ? 1.0f : 0.0f;
+					last_pen_inverted = false;
 				}
 			} else {
 				last_tilt = Vector2();
 				last_pressure = (wParam & MK_LBUTTON) ? 1.0f : 0.0f;
+				last_pen_inverted = false;
 			}
 
 			mm->set_pressure(last_pressure);
 			mm->set_tilt(last_tilt);
+			mm->set_pen_inverted(last_pen_inverted);
 
 			mm->set_button_mask(last_button_state);
 
@@ -750,7 +819,6 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 				SetCursorPos(pos.x, pos.y);
 			}
 
-			input->set_mouse_position(mm->get_position());
 			mm->set_speed(input->get_last_mouse_speed());
 
 			if (old_invalid) {
@@ -1081,7 +1149,7 @@ LRESULT OS_Windows::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
 		} break;
 		case WM_SETCURSOR: {
 			if (LOWORD(lParam) == HTCLIENT) {
-				if (window_has_focus && (mouse_mode == MOUSE_MODE_HIDDEN || mouse_mode == MOUSE_MODE_CAPTURED)) {
+				if (window_has_focus && (mouse_mode == MOUSE_MODE_HIDDEN || mouse_mode == MOUSE_MODE_CAPTURED || mouse_mode == MOUSE_MODE_CONFINED_HIDDEN)) {
 					//Hide the cursor
 					if (hCursor == NULL) {
 						hCursor = SetCursor(NULL);
@@ -1153,7 +1221,7 @@ void OS_Windows::process_key_events() {
 					k->set_control(ke.control);
 					k->set_metakey(ke.meta);
 					k->set_pressed(true);
-					k->set_scancode(KeyMappingWindows::get_keysym(ke.wParam));
+					k->set_scancode(KeyMappingWindows::get_keysym(MapVirtualKey((ke.lParam >> 16) & 0xFF, MAPVK_VSC_TO_VK)));
 					k->set_physical_scancode(KeyMappingWindows::get_scansym((ke.lParam >> 16) & 0xFF, ke.lParam & (1 << 24)));
 					k->set_unicode(ke.wParam);
 					if (k->get_unicode() && gr_mem) {
@@ -1322,6 +1390,9 @@ Error OS_Windows::initialize(const VideoMode &p_desired, int p_video_driver, int
 		return ERR_UNAVAILABLE;
 	}
 
+	// Init TTS
+	tts = memnew(TTS_Windows);
+
 	use_raw_input = true;
 
 	RAWINPUTDEVICE Rid[1];
@@ -1348,7 +1419,13 @@ Error OS_Windows::initialize(const VideoMode &p_desired, int p_video_driver, int
 
 		*/
 
-		EnumSizeData data = { 0, 0, Size2() };
+		// Get the primary monitor without providing hwnd
+		// Solution from https://devblogs.microsoft.com/oldnewthing/20070809-00/?p=25643
+		const POINT ptZero = { 0, 0 };
+		EnumScreenData primary_data = { 0, 0, MonitorFromPoint(ptZero, MONITOR_DEFAULTTOPRIMARY) };
+		EnumDisplayMonitors(NULL, NULL, _MonitorEnumProcScreen, (LPARAM)&primary_data);
+
+		EnumSizeData data = { 0, primary_data.screen, Size2() };
 		EnumDisplayMonitors(NULL, NULL, _MonitorEnumProcSize, (LPARAM)&data);
 
 		WindowRect.right = data.size.width;
@@ -1450,8 +1527,8 @@ Error OS_Windows::initialize(const VideoMode &p_desired, int p_video_driver, int
 	if ((get_current_tablet_driver() == "wintab") && wintab_available) {
 		wintab_WTInfo(WTI_DEFSYSCTX, 0, &wtlc);
 		wtlc.lcOptions |= CXO_MESSAGES;
-		wtlc.lcPktData = PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE | PK_ORIENTATION;
-		wtlc.lcMoveMask = PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE;
+		wtlc.lcPktData = PK_STATUS | PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE | PK_ORIENTATION;
+		wtlc.lcMoveMask = PK_STATUS | PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE;
 		wtlc.lcPktMode = 0;
 		wtlc.lcOutOrgX = 0;
 		wtlc.lcOutExtX = wtlc.lcInExtX;
@@ -1479,6 +1556,7 @@ Error OS_Windows::initialize(const VideoMode &p_desired, int p_video_driver, int
 	last_pressure = 0;
 	last_pressure_update = 0;
 	last_tilt = Vector2();
+	last_pen_inverted = false;
 
 #if defined(OPENGL_ENABLED)
 
@@ -1599,8 +1677,11 @@ Error OS_Windows::initialize(const VideoMode &p_desired, int p_video_driver, int
 
 	set_ime_active(false);
 
-	if (!OS::get_singleton()->is_in_low_processor_usage_mode()) {
-		//SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+	if (!Engine::get_singleton()->is_editor_hint() && !OS::get_singleton()->is_in_low_processor_usage_mode()) {
+		// Increase priority for projects that are not in low-processor mode (typically games)
+		// to reduce the risk of frame stuttering.
+		// This is not done for the editor to prevent importers or resource bakers
+		// from making the system unresponsive.
 		SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 		DWORD index = 0;
 		HANDLE handle = AvSetMmThreadCharacteristics("Games", &index);
@@ -1726,6 +1807,7 @@ void OS_Windows::finalize() {
 	memdelete(input);
 	touch_state.clear();
 
+	icon.unref();
 	cursors_cache.clear();
 	visual_server->finish();
 	memdelete(visual_server);
@@ -1741,6 +1823,11 @@ void OS_Windows::finalize() {
 	if (restore_mouse_trails > 1) {
 		SystemParametersInfoA(SPI_SETMOUSETRAILS, restore_mouse_trails, 0, 0);
 	}
+
+	if (tts) {
+		memdelete(tts);
+	}
+	CoUninitialize();
 }
 
 void OS_Windows::finalize_core() {
@@ -1769,7 +1856,8 @@ void OS_Windows::set_mouse_mode(MouseMode p_mode) {
 }
 
 void OS_Windows::_set_mouse_mode_impl(MouseMode p_mode) {
-	if (p_mode == MOUSE_MODE_CAPTURED || p_mode == MOUSE_MODE_CONFINED) {
+	if (p_mode == MOUSE_MODE_CAPTURED || p_mode == MOUSE_MODE_CONFINED || p_mode == MOUSE_MODE_CONFINED_HIDDEN) {
+		// Mouse is grabbed (captured or confined).
 		RECT clipRect;
 		GetClientRect(hWnd, &clipRect);
 		ClientToScreen(hWnd, (POINT *)&clipRect.left);
@@ -1783,11 +1871,12 @@ void OS_Windows::_set_mouse_mode_impl(MouseMode p_mode) {
 			SetCapture(hWnd);
 		}
 	} else {
+		// Mouse is free to move around (not captured or confined).
 		ReleaseCapture();
 		ClipCursor(NULL);
 	}
 
-	if (p_mode == MOUSE_MODE_CAPTURED || p_mode == MOUSE_MODE_HIDDEN) {
+	if (p_mode == MOUSE_MODE_CAPTURED || p_mode == MOUSE_MODE_HIDDEN || p_mode == MOUSE_MODE_CONFINED_HIDDEN) {
 		if (hCursor == NULL) {
 			hCursor = SetCursor(NULL);
 		} else {
@@ -1892,22 +1981,6 @@ int OS_Windows::get_screen_count() const {
 	return data;
 }
 
-typedef struct {
-	int count;
-	int screen;
-	HMONITOR monitor;
-} EnumScreenData;
-
-static BOOL CALLBACK _MonitorEnumProcScreen(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
-	EnumScreenData *data = (EnumScreenData *)dwData;
-	if (data->monitor == hMonitor) {
-		data->screen = data->count;
-	}
-
-	data->count++;
-	return TRUE;
-}
-
 int OS_Windows::get_current_screen() const {
 	EnumScreenData data = { 0, 0, MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST) };
 	EnumDisplayMonitors(NULL, NULL, _MonitorEnumProcScreen, (LPARAM)&data);
@@ -1915,8 +1988,19 @@ int OS_Windows::get_current_screen() const {
 }
 
 void OS_Windows::set_current_screen(int p_screen) {
-	Vector2 ofs = get_window_position() - get_screen_position(get_current_screen());
-	set_window_position(ofs + get_screen_position(p_screen));
+	if (video_mode.fullscreen) {
+		int cs = get_current_screen();
+		if (cs == p_screen) {
+			return;
+		}
+		Point2 pos = get_screen_position(p_screen);
+		Size2 size = get_screen_size(p_screen);
+
+		MoveWindow(hWnd, pos.x, pos.y, size.width, size.height, TRUE);
+	} else {
+		Vector2 ofs = get_window_position() - get_screen_position(get_current_screen());
+		set_window_position(ofs + get_screen_position(p_screen));
+	}
 }
 
 static BOOL CALLBACK _MonitorEnumProcPos(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
@@ -1948,6 +2032,12 @@ typedef struct {
 	int dpi;
 } EnumDpiData;
 
+typedef struct {
+	int count;
+	int screen;
+	float rate;
+} EnumRefreshRateData;
+
 static BOOL CALLBACK _MonitorEnumProcDpi(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
 	EnumDpiData *data = (EnumDpiData *)dwData;
 	if (data->count == data->screen) {
@@ -1958,10 +2048,44 @@ static BOOL CALLBACK _MonitorEnumProcDpi(HMONITOR hMonitor, HDC hdcMonitor, LPRE
 	return TRUE;
 }
 
+static BOOL CALLBACK _MonitorEnumProcRefreshRate(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
+	EnumRefreshRateData *data = (EnumRefreshRateData *)dwData;
+	if (data->count == data->screen) {
+		MONITORINFOEXW minfo;
+		memset(&minfo, 0, sizeof(minfo));
+		minfo.cbSize = sizeof(minfo);
+		GetMonitorInfoW(hMonitor, &minfo);
+
+		DEVMODEW dm;
+		memset(&dm, 0, sizeof(dm));
+		dm.dmSize = sizeof(dm);
+		EnumDisplaySettingsW(minfo.szDevice, ENUM_CURRENT_SETTINGS, &dm);
+
+		data->rate = dm.dmDisplayFrequency;
+	}
+
+	data->count++;
+	return TRUE;
+}
+
 int OS_Windows::get_screen_dpi(int p_screen) const {
-	EnumDpiData data = { 0, p_screen == -1 ? get_current_screen() : p_screen, 72 };
+	EnumDpiData data = {
+		0,
+		p_screen == -1 ? get_current_screen() : p_screen,
+		72,
+	};
 	EnumDisplayMonitors(NULL, NULL, _MonitorEnumProcDpi, (LPARAM)&data);
 	return data.dpi;
+}
+
+float OS_Windows::get_screen_refresh_rate(int p_screen) const {
+	EnumRefreshRateData data = {
+		0,
+		p_screen == -1 ? get_current_screen() : p_screen,
+		OS::get_singleton()->SCREEN_REFRESH_RATE_FALLBACK,
+	};
+	EnumDisplayMonitors(nullptr, nullptr, _MonitorEnumProcRefreshRate, (LPARAM)&data);
+	return data.rate;
 }
 
 Point2 OS_Windows::get_window_position() const {
@@ -1982,7 +2106,7 @@ void OS_Windows::set_window_position(const Point2 &p_position) {
 	MoveWindow(hWnd, p_position.x, p_position.y, r.right - r.left, r.bottom - r.top, TRUE);
 
 	// Don't let the mouse leave the window when moved
-	if (mouse_mode == MOUSE_MODE_CONFINED) {
+	if (mouse_mode == MOUSE_MODE_CONFINED || mouse_mode == MOUSE_MODE_CONFINED_HIDDEN) {
 		RECT rect;
 		GetClientRect(hWnd, &rect);
 		ClientToScreen(hWnd, (POINT *)&rect.left);
@@ -2063,7 +2187,7 @@ void OS_Windows::set_window_size(const Size2 p_size) {
 	MoveWindow(hWnd, rect.left, rect.top, w, h, TRUE);
 
 	// Don't let the mouse leave the window when resizing to a smaller resolution
-	if (mouse_mode == MOUSE_MODE_CONFINED) {
+	if (mouse_mode == MOUSE_MODE_CONFINED || mouse_mode == MOUSE_MODE_CONFINED_HIDDEN) {
 		RECT crect;
 		GetClientRect(hWnd, &crect);
 		ClientToScreen(hWnd, (POINT *)&crect.left);
@@ -2257,6 +2381,10 @@ void OS_Windows::_update_window_style(bool p_repaint, bool p_maximized) {
 		}
 	}
 
+	if (icon.is_valid()) {
+		set_icon(icon);
+	}
+
 	SetWindowPos(hWnd, video_mode.always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
 
 	if (p_repaint) {
@@ -2354,12 +2482,19 @@ OS::Date OS_Windows::get_date(bool utc) const {
 	else
 		GetLocalTime(&systemtime);
 
+	// Get DST information from Windows, but only if utc is false.
+	TIME_ZONE_INFORMATION info;
+	bool daylight = false;
+	if (!utc && GetTimeZoneInformation(&info) == TIME_ZONE_ID_DAYLIGHT) {
+		daylight = true;
+	}
+
 	Date date;
 	date.day = systemtime.wDay;
 	date.month = Month(systemtime.wMonth);
 	date.weekday = Weekday(systemtime.wDayOfWeek);
 	date.year = systemtime.wYear;
-	date.dst = false;
+	date.dst = daylight;
 	return date;
 }
 OS::Time OS_Windows::get_time(bool utc) const {
@@ -2382,16 +2517,19 @@ OS::TimeZoneInfo OS_Windows::get_time_zone_info() const {
 	if (GetTimeZoneInformation(&info) == TIME_ZONE_ID_DAYLIGHT)
 		daylight = true;
 
+	// Daylight Bias needs to be added to the bias if DST is in effect, or else it will not properly update.
 	TimeZoneInfo ret;
 	if (daylight) {
 		ret.name = info.DaylightName;
+		ret.bias = info.Bias + info.DaylightBias;
 	} else {
 		ret.name = info.StandardName;
+		ret.bias = info.Bias + info.StandardBias;
 	}
 
 	// Bias value returned by GetTimeZoneInformation is inverted of what we expect
-	// For example on GMT-3 GetTimeZoneInformation return a Bias of 180, so invert the value to get -180
-	ret.bias = -info.Bias;
+	// For example, on GMT-3 GetTimeZoneInformation return a Bias of 180, so invert the value to get -180
+	ret.bias = -ret.bias;
 	return ret;
 }
 
@@ -2444,6 +2582,23 @@ uint64_t OS_Windows::get_system_time_msecs() const {
 	ret |= ft.dwLowDateTime;
 
 	return (uint64_t)(ret / WINDOWS_TICK - MSEC_TO_UNIX_EPOCH);
+}
+
+double OS_Windows::get_subsecond_unix_time() const {
+	// 1 Windows tick is 100ns
+	const uint64_t WINDOWS_TICKS_PER_SECOND = 10000000;
+	const uint64_t TICKS_TO_UNIX_EPOCH = 116444736000000000LL;
+
+	SYSTEMTIME st;
+	GetSystemTime(&st);
+	FILETIME ft;
+	SystemTimeToFileTime(&st, &ft);
+	uint64_t ticks_time;
+	ticks_time = ft.dwHighDateTime;
+	ticks_time <<= 32;
+	ticks_time |= ft.dwLowDateTime;
+
+	return (double)(ticks_time - TICKS_TO_UNIX_EPOCH) / WINDOWS_TICKS_PER_SECOND;
 }
 
 void OS_Windows::delay_usec(uint32_t p_usec) const {
@@ -2734,6 +2889,31 @@ String OS_Windows::_quote_command_line_argument(const String &p_text) const {
 	return p_text;
 }
 
+static void _append_to_pipe(char *p_bytes, int p_size, String *r_pipe, Mutex *p_pipe_mutex) {
+	// Try to convert from default ANSI code page to Unicode.
+	LocalVector<wchar_t> wchars;
+	int total_wchars = MultiByteToWideChar(CP_ACP, 0, p_bytes, p_size, nullptr, 0);
+	if (total_wchars > 0) {
+		wchars.resize(total_wchars);
+		if (MultiByteToWideChar(CP_ACP, 0, p_bytes, p_size, wchars.ptr(), total_wchars) == 0) {
+			wchars.clear();
+		}
+	}
+
+	if (p_pipe_mutex) {
+		p_pipe_mutex->lock();
+	}
+	if (wchars.empty()) {
+		// Let's hope it's compatible with UTF-8.
+		(*r_pipe) += String::utf8(p_bytes, p_size);
+	} else {
+		(*r_pipe) += String(wchars.ptr(), total_wchars);
+	}
+	if (p_pipe_mutex) {
+		p_pipe_mutex->unlock();
+	}
+}
+
 Error OS_Windows::execute(const String &p_path, const List<String> &p_arguments, bool p_blocking, ProcessID *r_child_id, String *r_pipe, int *r_exitcode, bool read_stderr, Mutex *p_pipe_mutex, bool p_open_console) {
 	String path = p_path.replace("/", "\\");
 
@@ -2792,21 +2972,44 @@ Error OS_Windows::execute(const String &p_path, const List<String> &p_arguments,
 	if (p_blocking) {
 		if (r_pipe) {
 			CloseHandle(pipe[1]); // Close pipe write handle (only child process is writing).
-			char buf[4096];
+
+			LocalVector<char> bytes;
+			int bytes_in_buffer = 0;
+
+			const int CHUNK_SIZE = 4096;
 			DWORD read = 0;
 			for (;;) { // Read StdOut and StdErr from pipe.
-				bool success = ReadFile(pipe[0], buf, 4096, &read, NULL);
+				bytes.resize(bytes_in_buffer + CHUNK_SIZE);
+				const bool success = ReadFile(pipe[0], bytes.ptr() + bytes_in_buffer, CHUNK_SIZE, &read, NULL);
 				if (!success || read == 0) {
 					break;
 				}
-				if (p_pipe_mutex) {
-					p_pipe_mutex->lock();
+				// Assume that all possible encodings are ASCII-compatible.
+				// Break at newline to allow receiving long output in portions.
+				int newline_index = -1;
+				for (int i = read - 1; i >= 0; i--) {
+					if (bytes[bytes_in_buffer + i] == '\n') {
+						newline_index = i;
+						break;
+					}
 				}
-				(*r_pipe) += String::utf8(buf, read);
-				if (p_pipe_mutex) {
-					p_pipe_mutex->unlock();
+
+				if (newline_index == -1) {
+					bytes_in_buffer += read;
+					continue;
 				}
-			};
+
+				const int bytes_to_convert = bytes_in_buffer + (newline_index + 1);
+				_append_to_pipe(bytes.ptr(), bytes_to_convert, r_pipe, p_pipe_mutex);
+
+				bytes_in_buffer = read - (newline_index + 1);
+				memmove(bytes.ptr(), bytes.ptr() + bytes_to_convert, bytes_in_buffer);
+			}
+
+			if (bytes_in_buffer > 0) {
+				_append_to_pipe(bytes.ptr(), bytes_in_buffer, r_pipe, p_pipe_mutex);
+			}
+
 			CloseHandle(pipe[0]); // Close pipe read handle.
 		} else {
 			WaitForSingleObject(pi.pi.hProcess, INFINITE);
@@ -2828,7 +3031,7 @@ Error OS_Windows::execute(const String &p_path, const List<String> &p_arguments,
 		process_map->insert(pid, pi);
 	}
 	return OK;
-};
+}
 
 Error OS_Windows::kill(const ProcessID &p_pid) {
 	ERR_FAIL_COND_V(!process_map->has(p_pid), FAILED);
@@ -2846,6 +3049,25 @@ Error OS_Windows::kill(const ProcessID &p_pid) {
 
 int OS_Windows::get_process_id() const {
 	return _getpid();
+}
+
+bool OS_Windows::is_process_running(const ProcessID &p_pid) const {
+	if (!process_map->has(p_pid)) {
+		return false;
+	}
+
+	const PROCESS_INFORMATION &pi = (*process_map)[p_pid].pi;
+
+	DWORD dw_exit_code = 0;
+	if (!GetExitCodeProcess(pi.hProcess, &dw_exit_code)) {
+		return false;
+	}
+
+	if (dw_exit_code != STILL_ACTIVE) {
+		return false;
+	}
+
+	return true;
 }
 
 Error OS_Windows::set_cwd(const String &p_cwd) {
@@ -2956,9 +3178,12 @@ void OS_Windows::set_native_icon(const String &p_filename) {
 
 void OS_Windows::set_icon(const Ref<Image> &p_icon) {
 	ERR_FAIL_COND(!p_icon.is_valid());
-	Ref<Image> icon = p_icon->duplicate();
-	if (icon->get_format() != Image::FORMAT_RGBA8)
-		icon->convert(Image::FORMAT_RGBA8);
+	if (icon != p_icon) {
+		icon = p_icon->duplicate();
+		if (icon->get_format() != Image::FORMAT_RGBA8) {
+			icon->convert(Image::FORMAT_RGBA8);
+		}
+	}
 	int w = icon->get_width();
 	int h = icon->get_height();
 
@@ -3114,14 +3339,24 @@ BOOL is_wow64() {
 	return wow64;
 }
 
-int OS_Windows::get_processor_count() const {
-	SYSTEM_INFO sysinfo;
-	if (is_wow64())
-		GetNativeSystemInfo(&sysinfo);
-	else
-		GetSystemInfo(&sysinfo);
+String OS_Windows::get_processor_name() const {
+	const String id = "Hardware\\Description\\System\\CentralProcessor\\0";
 
-	return sysinfo.dwNumberOfProcessors;
+	HKEY hkey;
+	if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, (LPCWSTR)(id.c_str()), 0, KEY_QUERY_VALUE, &hkey) != ERROR_SUCCESS) {
+		ERR_FAIL_V_MSG("", String("Couldn't get the CPU model name. Returning an empty string."));
+	}
+
+	WCHAR buffer[256];
+	DWORD buffer_len = 256;
+	DWORD vtype = REG_SZ;
+	if (RegQueryValueExW(hkey, L"ProcessorNameString", NULL, &vtype, (LPBYTE)buffer, &buffer_len) == ERROR_SUCCESS) {
+		RegCloseKey(hkey);
+		return String((const wchar_t *)buffer, buffer_len).strip_edges();
+	} else {
+		RegCloseKey(hkey);
+		ERR_FAIL_V_MSG("", String("Couldn't get the CPU model name. Returning an empty string."));
+	}
 }
 
 OS::LatinKeyboardVariant OS_Windows::get_latin_keyboard_variant() const {
@@ -3354,15 +3589,59 @@ MainLoop *OS_Windows::get_main_loop() const {
 	return main_loop;
 }
 
-String OS_Windows::get_config_path() const {
-	// The XDG Base Directory specification technically only applies on Linux/*BSD, but it doesn't hurt to support it on Windows as well.
-	if (has_environment("XDG_CONFIG_HOME")) {
-		if (get_environment("XDG_CONFIG_HOME").is_abs_path()) {
-			return get_environment("XDG_CONFIG_HOME").replace("\\", "/");
-		} else {
-			WARN_PRINT_ONCE("`XDG_CONFIG_HOME` is a relative path. Ignoring its value and falling back to `%APPDATA%` or `.` per the XDG Base Directory specification.");
+uint64_t OS_Windows::get_embedded_pck_offset() const {
+	FileAccessRef f = FileAccess::open(get_executable_path(), FileAccess::READ);
+	if (!f) {
+		return 0;
+	}
+
+	// Process header.
+	{
+		f->seek(0x3c);
+		uint32_t pe_pos = f->get_32();
+
+		f->seek(pe_pos);
+		uint32_t magic = f->get_32();
+		if (magic != 0x00004550) {
+			return 0;
 		}
 	}
+
+	int num_sections;
+	{
+		int64_t header_pos = f->get_position();
+
+		f->seek(header_pos + 2);
+		num_sections = f->get_16();
+		f->seek(header_pos + 16);
+		uint16_t opt_header_size = f->get_16();
+
+		// Skip rest of header + optional header to go to the section headers.
+		f->seek(f->get_position() + 2 + opt_header_size);
+	}
+	int64_t section_table_pos = f->get_position();
+
+	// Search for the "pck" section.
+	int64_t off = 0;
+	for (int i = 0; i < num_sections; ++i) {
+		int64_t section_header_pos = section_table_pos + i * 40;
+		f->seek(section_header_pos);
+
+		uint8_t section_name[9];
+		f->get_buffer(section_name, 8);
+		section_name[8] = '\0';
+
+		if (strcmp((char *)section_name, "pck") == 0) {
+			f->seek(section_header_pos + 20);
+			off = f->get_32();
+			break;
+		}
+	}
+
+	return off;
+}
+
+String OS_Windows::get_config_path() const {
 	if (has_environment("APPDATA")) {
 		return get_environment("APPDATA").replace("\\", "/");
 	}
@@ -3370,29 +3649,13 @@ String OS_Windows::get_config_path() const {
 }
 
 String OS_Windows::get_data_path() const {
-	// The XDG Base Directory specification technically only applies on Linux/*BSD, but it doesn't hurt to support it on Windows as well.
-	if (has_environment("XDG_DATA_HOME")) {
-		if (get_environment("XDG_DATA_HOME").is_abs_path()) {
-			return get_environment("XDG_DATA_HOME").replace("\\", "/");
-		} else {
-			WARN_PRINT_ONCE("`XDG_DATA_HOME` is a relative path. Ignoring its value and falling back to `get_config_path()` per the XDG Base Directory specification.");
-		}
-	}
 	return get_config_path();
 }
 
 String OS_Windows::get_cache_path() const {
 	static String cache_path_cache;
 	if (cache_path_cache == String()) {
-		// The XDG Base Directory specification technically only applies on Linux/*BSD, but it doesn't hurt to support it on Windows as well.
-		if (has_environment("XDG_CACHE_HOME")) {
-			if (get_environment("XDG_CACHE_HOME").is_abs_path()) {
-				cache_path_cache = get_environment("XDG_CACHE_HOME").replace("\\", "/");
-			} else {
-				WARN_PRINT_ONCE("`XDG_CACHE_HOME` is a relative path. Ignoring its value and falling back to `%LOCALAPPDATA%\\cache`, `%TEMP%` or `get_config_path()` per the XDG Base Directory specification.");
-			}
-		}
-		if (cache_path_cache == String() && has_environment("LOCALAPPDATA")) {
+		if (has_environment("LOCALAPPDATA")) {
 			cache_path_cache = get_environment("LOCALAPPDATA").replace("\\", "/");
 		}
 		if (cache_path_cache == String() && has_environment("TEMP")) {
@@ -3611,8 +3874,8 @@ void OS_Windows::set_current_tablet_driver(const String &p_driver) {
 			if ((p_driver == "wintab") && wintab_available) {
 				wintab_WTInfo(WTI_DEFSYSCTX, 0, &wtlc);
 				wtlc.lcOptions |= CXO_MESSAGES;
-				wtlc.lcPktData = PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE | PK_ORIENTATION;
-				wtlc.lcMoveMask = PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE;
+				wtlc.lcPktData = PK_STATUS | PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE | PK_ORIENTATION;
+				wtlc.lcMoveMask = PK_STATUS | PK_NORMAL_PRESSURE | PK_TANGENT_PRESSURE;
 				wtlc.lcPktMode = 0;
 				wtlc.lcOutOrgX = 0;
 				wtlc.lcOutExtX = wtlc.lcInExtX;
@@ -3700,6 +3963,18 @@ OS_Windows::OS_Windows(HINSTANCE _hInstance) {
 #ifdef XAUDIO2_ENABLED
 	AudioDriverManager::add_driver(&driver_xaudio2);
 #endif
+
+	// Enable ANSI escape code support on Windows 10 v1607 (Anniversary Update) and later.
+	// This lets the engine and projects use ANSI escape codes to color text just like on macOS and Linux.
+	//
+	// NOTE: The engine does not use ANSI escape codes to color error/warning messages; it uses Windows API calls instead.
+	// Therefore, error/warning messages are still colored on Windows versions older than 10.
+	HANDLE stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+	DWORD outMode = ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+	if (!SetConsoleMode(stdoutHandle, outMode)) {
+		// Windows 8.1 or below, or Windows 10 prior to Anniversary Update.
+		print_verbose("Can't set the ENABLE_VIRTUAL_TERMINAL_PROCESSING Windows console mode.");
+	}
 
 	Vector<Logger *> loggers;
 	loggers.push_back(memnew(WindowsTerminalLogger));

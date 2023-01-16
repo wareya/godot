@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<class name="Dictionary" version="3.5">
+<class name="Dictionary" version="3.6" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
 	<brief_description>
 		Dictionary type.
 	</brief_description>
 	<description>
-		Dictionary type. Associative container which contains values referenced by unique keys. Dictionaries are composed of pairs of keys (which must be unique) and values. Dictionaries will preserve the insertion order when adding elements, even though this may not be reflected when printing the dictionary. In other programming languages, this data structure is sometimes referred to as a hash map or associative array.
+		Dictionary type. Associative container, which contains values referenced by unique keys. Dictionaries are composed of pairs of keys (which must be unique) and values. Dictionaries will preserve the insertion order when adding elements. In other programming languages, this data structure is sometimes referred to as a hash map or associative array.
 		You can define a dictionary by placing a comma-separated list of [code]key: value[/code] pairs in curly braces [code]{}[/code].
 		Erasing elements while iterating over them [b]is not supported[/b] and will result in undefined behavior.
 		[b]Note:[/b] Dictionaries are always passed by reference. To get a copy of a dictionary which can be modified independently of the original dictionary, use [method duplicate].
@@ -31,7 +31,7 @@
 		[/codeblock]
 		You can access a dictionary's values by referencing the appropriate key. In the above example, [code]points_dict["White"][/code] will return [code]50[/code]. You can also write [code]points_dict.White[/code], which is equivalent. However, you'll have to use the bracket syntax if the key you're accessing the dictionary with isn't a fixed string (such as a number or variable).
 		[codeblock]
-		export(string, "White", "Yellow", "Orange") var my_color
+		export(String, "White", "Yellow", "Orange") var my_color
 		var points_dict = {"White": 50, "Yellow": 75, "Orange": 100}
 		func _ready():
 		    # We can't use dot syntax here as `my_color` is a variable.
@@ -115,6 +115,14 @@
 				[b]Note:[/b] Don't erase elements while iterating over the dictionary. You can iterate over the [method keys] array instead.
 			</description>
 		</method>
+		<method name="find_key">
+			<return type="Variant" />
+			<argument index="0" name="value" type="Variant" />
+			<description>
+				Returns the first key whose associated value is equal to [code]value[/code], or [code]null[/code] if no such value is found.
+				[b]Note:[/b] [code]null[/code] is also a valid key. If you have it in your [Dictionary], the [method find_key] method can give misleading results.
+			</description>
+		</method>
 		<method name="get">
 			<return type="Variant" />
 			<argument index="0" name="key" type="Variant" />
@@ -147,7 +155,7 @@
 		<method name="hash">
 			<return type="int" />
 			<description>
-				Returns a hashed integer value representing the dictionary contents. This can be used to compare dictionaries by value:
+				Returns a hashed 32-bit integer value representing the dictionary contents. This can be used to compare dictionaries by value:
 				[codeblock]
 				var dict1 = {0: 10}
 				var dict2 = {0: 10}
@@ -155,12 +163,20 @@
 				print(dict1.hash() == dict2.hash())
 				[/codeblock]
 				[b]Note:[/b] Dictionaries with the same keys/values but in a different order will have a different hash.
+				[b]Note:[/b] Dictionaries with equal content will always produce identical hash values. However, the reverse is not true. Returning identical hash values does [i]not[/i] imply the dictionaries are equal, because different dictionaries can have identical hash values due to hash collisions.
 			</description>
 		</method>
 		<method name="keys">
 			<return type="Array" />
 			<description>
 				Returns the list of keys in the [Dictionary].
+			</description>
+		</method>
+		<method name="merge">
+			<argument index="0" name="dictionary" type="Dictionary" />
+			<argument index="1" name="overwrite" type="bool" default="false" />
+			<description>
+				Adds elements from [code]dictionary[/code] to this [Dictionary]. By default, duplicate keys will not be copied over, unless [code]overwrite[/code] is [code]true[/code].
 			</description>
 		</method>
 		<method name="size">

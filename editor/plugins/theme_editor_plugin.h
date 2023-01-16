@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  theme_editor_plugin.h                                                */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  theme_editor_plugin.h                                                 */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #ifndef THEME_EDITOR_PLUGIN_H
 #define THEME_EDITOR_PLUGIN_H
@@ -176,7 +176,11 @@ class ThemeItemEditorDialog : public AcceptDialog {
 
 	TabContainer *tc;
 
-	ItemList *edit_type_list;
+	enum TypesTreeAction {
+		TYPES_TREE_REMOVE_ITEM,
+	};
+
+	Tree *edit_type_list;
 	LineEdit *edit_add_type_value;
 	String edited_item_type;
 
@@ -227,13 +231,15 @@ class ThemeItemEditorDialog : public AcceptDialog {
 
 	void _dialog_about_to_show();
 	void _update_edit_types();
-	void _edited_type_selected(int p_item_idx);
+	void _edited_type_selected();
+	void _edited_type_button_pressed(Object *p_item, int p_column, int p_id);
 
 	void _update_edit_item_tree(String p_item_type);
 	void _item_tree_button_pressed(Object *p_item, int p_column, int p_id);
 
 	void _add_theme_type(const String &p_new_text);
 	void _add_theme_item(Theme::DataType p_data_type, String p_item_name, String p_item_type);
+	void _remove_theme_type(const String &p_theme_type);
 	void _remove_data_type_items(Theme::DataType p_data_type, String p_item_type);
 	void _remove_class_items();
 	void _remove_custom_items();
@@ -321,6 +327,16 @@ class ThemeTypeEditor : public MarginContainer {
 	VBoxContainer *icon_items_list;
 	VBoxContainer *stylebox_items_list;
 
+	LineEdit *type_variation_edit;
+	Button *type_variation_button;
+	Label *type_variation_locked;
+
+	enum TypeDialogMode {
+		ADD_THEME_TYPE,
+		ADD_VARIATION_BASE,
+	};
+
+	TypeDialogMode add_type_mode = ADD_THEME_TYPE;
 	ThemeTypeDialog *add_type_dialog;
 
 	Vector<Control *> focusables;
@@ -356,6 +372,9 @@ class ThemeTypeEditor : public MarginContainer {
 	void _pin_leading_stylebox(Control *p_editor, String p_item_name);
 	void _unpin_leading_stylebox();
 	void _update_stylebox_from_leading();
+
+	void _type_variation_changed(const String p_value);
+	void _add_type_variation_cbk();
 
 	void _add_type_dialog_selected(const String p_type_name);
 

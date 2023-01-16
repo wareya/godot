@@ -63,12 +63,7 @@
 #include "mbedtls/nist_kw.h"
 #endif
 
-#if defined(MBEDTLS_PLATFORM_C)
 #include "mbedtls/platform.h"
-#else
-#define mbedtls_calloc calloc
-#define mbedtls_free   free
-#endif
 
 #define CIPHER_VALIDATE_RET( cond )    \
     MBEDTLS_INTERNAL_VALIDATE_RET( cond, MBEDTLS_ERR_CIPHER_BAD_INPUT_DATA )
@@ -386,6 +381,12 @@ int mbedtls_cipher_set_iv( mbedtls_cipher_context_t *ctx,
 #if defined(MBEDTLS_CHACHA20_C)
     if ( ctx->cipher_info->type == MBEDTLS_CIPHER_CHACHA20 )
     {
+        /* Even though the actual_iv_size is overwritten with a correct value
+         * of 12 from the cipher info, return an error to indicate that
+         * the input iv_len is wrong. */
+        if( iv_len != 12 )
+            return( MBEDTLS_ERR_CIPHER_BAD_INPUT_DATA );
+
         if ( 0 != mbedtls_chacha20_starts( (mbedtls_chacha20_context*)ctx->cipher_ctx,
                                            iv,
                                            0U ) ) /* Initial counter value */
@@ -393,6 +394,11 @@ int mbedtls_cipher_set_iv( mbedtls_cipher_context_t *ctx,
             return( MBEDTLS_ERR_CIPHER_BAD_INPUT_DATA );
         }
     }
+#if defined(MBEDTLS_CHACHAPOLY_C)
+    if ( ctx->cipher_info->type == MBEDTLS_CIPHER_CHACHA20_POLY1305 &&
+         iv_len != 12 )
+        return( MBEDTLS_ERR_CIPHER_BAD_INPUT_DATA );
+#endif
 #endif
 
     if ( actual_iv_size != 0 )

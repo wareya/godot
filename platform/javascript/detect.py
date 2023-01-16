@@ -31,7 +31,6 @@ def get_opts():
     return [
         ("initial_memory", "Initial WASM memory (in MiB)", 32),
         BoolVariable("use_assertions", "Use Emscripten runtime assertions", False),
-        BoolVariable("use_thinlto", "Use ThinLTO", False),
         BoolVariable("use_ubsan", "Use Emscripten undefined behavior sanitizer (UBSAN)", False),
         BoolVariable("use_asan", "Use Emscripten address sanitizer (ASAN)", False),
         BoolVariable("use_lsan", "Use Emscripten leak sanitizer (LSAN)", False),
@@ -48,11 +47,6 @@ def get_flags():
     return [
         ("tools", False),
         ("builtin_pcre2_with_jit", False),
-        # Disabling the mbedtls module reduces file size.
-        # The module has little use due to the limited networking functionality
-        # in this platform. For the available networking methods, the browser
-        # manages TLS.
-        ("module_mbedtls_enabled", False),
     ]
 
 
@@ -88,10 +82,10 @@ def configure(env):
 
     if env["tools"]:
         if not env["threads_enabled"]:
-            print("Threads must be enabled to build the editor. Please add the 'threads_enabled=yes' option")
-            sys.exit(255)
+            print('Note: Forcing "threads_enabled=yes" as it is required for the web editor.')
+            env["threads_enabled"] = "yes"
         if env["initial_memory"] < 64:
-            print("Editor build requires at least 64MiB of initial memory. Forcing it.")
+            print('Note: Forcing "initial_memory=64" as it is required for the web editor.')
             env["initial_memory"] = 64
     else:
         # Disable exceptions and rtti on non-tools (template) builds
@@ -106,12 +100,17 @@ def configure(env):
     env["ENV"] = os.environ
 
     # LTO
-    if env["use_thinlto"]:
-        env.Append(CCFLAGS=["-flto=thin"])
-        env.Append(LINKFLAGS=["-flto=thin"])
-    elif env["use_lto"]:
-        env.Append(CCFLAGS=["-flto=full"])
-        env.Append(LINKFLAGS=["-flto=full"])
+
+    if env["lto"] == "auto":  # Full LTO for production.
+        env["lto"] = "full"
+
+    if env["lto"] != "none":
+        if env["lto"] == "thin":
+            env.Append(CCFLAGS=["-flto=thin"])
+            env.Append(LINKFLAGS=["-flto=thin"])
+        else:
+            env.Append(CCFLAGS=["-flto"])
+            env.Append(LINKFLAGS=["-flto"])
 
     # Sanitizers
     if env["use_ubsan"]:
@@ -162,9 +161,9 @@ def configure(env):
     env["ARCOM_POSIX"] = env["ARCOM"].replace("$TARGET", "$TARGET.posix").replace("$SOURCES", "$SOURCES.posix")
     env["ARCOM"] = "${TEMPFILE(ARCOM_POSIX)}"
 
-    # All intermediate files are just LLVM bitcode.
+    # All intermediate files are just object files.
     env["OBJPREFIX"] = ""
-    env["OBJSUFFIX"] = ".bc"
+    env["OBJSUFFIX"] = ".o"
     env["PROGPREFIX"] = ""
     # Program() output consists of multiple files, so specify suffixes manually at builder.
     env["PROGSUFFIX"] = ""
@@ -179,10 +178,6 @@ def configure(env):
     if env["javascript_eval"]:
         env.Append(CPPDEFINES=["JAVASCRIPT_EVAL_ENABLED"])
 
-    if env["threads_enabled"] and env["gdnative_enabled"]:
-        print("Threads and GDNative support can't be both enabled due to WebAssembly limitations")
-        sys.exit(255)
-
     # Thread support (via SharedArrayBuffer).
     if env["threads_enabled"]:
         env.Append(CPPDEFINES=["PTHREAD_NO_RENAME"])
@@ -195,12 +190,17 @@ def configure(env):
         env.Append(CPPDEFINES=["NO_THREADS"])
 
     if env["gdnative_enabled"]:
-        major, minor, patch = get_compiler_version(env)
-        if major < 2 or (major == 2 and minor == 0 and patch < 10):
-            print("GDNative support requires emscripten >= 2.0.10, detected: %s.%s.%s" % (major, minor, patch))
+        cc_semver = tuple(get_compiler_version(env))
+        if cc_semver < (2, 0, 10):
+            print("GDNative support requires emscripten >= 2.0.10, detected: %s.%s.%s" % cc_semver)
+            sys.exit(255)
+        if env["threads_enabled"] and cc_semver < (3, 1, 14):
+            print("Threads and GDNative requires emscripten => 3.1.14, detected: %s.%s.%s" % cc_semver)
             sys.exit(255)
         env.Append(CCFLAGS=["-s", "RELOCATABLE=1"])
         env.Append(LINKFLAGS=["-s", "RELOCATABLE=1"])
+        # Weak symbols are broken upstream: https://github.com/emscripten-core/emscripten/issues/12819
+        env.Append(CPPDEFINES=["ZSTD_HAVE_WEAK_SYMBOLS=0"])
         env.extra_suffix = ".gdnative" + env.extra_suffix
 
     # Reduce code size by generating less support code (e.g. skip NodeJS support).

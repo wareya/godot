@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  node.cpp                                                             */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  node.cpp                                                              */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "node.h"
 
@@ -35,6 +35,7 @@
 #include "core/message_queue.h"
 #include "core/print_string.h"
 #include "instance_placeholder.h"
+#include "scene/animation/scene_tree_tween.h"
 #include "scene/resources/packed_scene.h"
 #include "scene/scene_string_names.h"
 #include "viewport.h"
@@ -44,6 +45,7 @@
 #endif
 
 VARIANT_ENUM_CAST(Node::PauseMode);
+VARIANT_ENUM_CAST(Node::PhysicsInterpolationMode);
 
 int Node::orphan_node_count = 0;
 
@@ -76,6 +78,14 @@ void Node::_notification(int p_notification) {
 				}
 			} else {
 				data.pause_owner = this;
+			}
+
+			if (data.physics_interpolation_mode == PHYSICS_INTERPOLATION_MODE_INHERIT) {
+				bool interpolate = true; // Root node default is for interpolation to be on
+				if (data.parent) {
+					interpolate = data.parent->is_physics_interpolated();
+				}
+				_propagate_physics_interpolated(interpolate);
 			}
 
 			if (data.input) {
@@ -181,6 +191,48 @@ void Node::_propagate_ready() {
 	}
 }
 
+void Node::_propagate_physics_interpolated(bool p_interpolated) {
+	switch (data.physics_interpolation_mode) {
+		case PHYSICS_INTERPOLATION_MODE_INHERIT:
+			// keep the parent p_interpolated
+			break;
+		case PHYSICS_INTERPOLATION_MODE_OFF: {
+			p_interpolated = false;
+		} break;
+		case PHYSICS_INTERPOLATION_MODE_ON: {
+			p_interpolated = true;
+		} break;
+	}
+
+	// no change? no need to propagate further
+	if (data.physics_interpolated == p_interpolated) {
+		return;
+	}
+
+	data.physics_interpolated = p_interpolated;
+
+	// allow a call to the VisualServer etc in derived classes
+	_physics_interpolated_changed();
+
+	data.blocked++;
+	for (int i = 0; i < data.children.size(); i++) {
+		data.children[i]->_propagate_physics_interpolated(p_interpolated);
+	}
+	data.blocked--;
+}
+
+void Node::_propagate_physics_interpolation_reset_requested() {
+	if (is_physics_interpolated()) {
+		data.physics_interpolation_reset_requested = true;
+	}
+
+	data.blocked++;
+	for (int i = 0; i < data.children.size(); i++) {
+		data.children[i]->_propagate_physics_interpolation_reset_requested();
+	}
+	data.blocked--;
+}
+
 void Node::_propagate_enter_tree() {
 	// this needs to happen to all children before any enter_tree
 
@@ -212,6 +264,12 @@ void Node::_propagate_enter_tree() {
 
 	data.tree->node_added(this);
 
+	if (data.parent) {
+		Variant c = this;
+		const Variant *cptr = &c;
+		data.parent->emit_signal(SceneStringNames::get_singleton()->child_entered_tree, &cptr, 1);
+	}
+
 	data.blocked++;
 	//block while adding children
 
@@ -233,7 +291,7 @@ void Node::_propagate_enter_tree() {
 	// enter groups
 }
 
-void Node::_propagate_after_exit_tree() {
+void Node::_propagate_after_exit_branch(bool p_exiting_tree) {
 	// Clear owner if it was not part of the pruned branch
 	if (data.owner) {
 		bool found = false;
@@ -249,6 +307,9 @@ void Node::_propagate_after_exit_tree() {
 		}
 
 		if (!found) {
+			if (data.unique_name_in_owner) {
+				_release_unique_name_in_owner();
+			}
 			data.owner->data.owned.erase(data.OW);
 			data.owner = nullptr;
 		}
@@ -256,11 +317,13 @@ void Node::_propagate_after_exit_tree() {
 
 	data.blocked++;
 	for (int i = 0; i < data.children.size(); i++) {
-		data.children[i]->_propagate_after_exit_tree();
+		data.children[i]->_propagate_after_exit_branch(p_exiting_tree);
 	}
 	data.blocked--;
 
-	emit_signal(SceneStringNames::get_singleton()->tree_exited);
+	if (p_exiting_tree) {
+		emit_signal(SceneStringNames::get_singleton()->tree_exited);
+	}
 }
 
 void Node::_propagate_exit_tree() {
@@ -303,6 +366,12 @@ void Node::_propagate_exit_tree() {
 	notification(NOTIFICATION_EXIT_TREE, true);
 	if (data.tree) {
 		data.tree->node_removed(this);
+	}
+
+	if (data.parent) {
+		Variant c = this;
+		const Variant *cptr = &c;
+		data.parent->emit_signal(SceneStringNames::get_singleton()->child_exiting_tree, &cptr, 1);
 	}
 
 	// exit groups
@@ -360,11 +429,7 @@ void Node::move_child(Node *p_child, int p_pos) {
 	for (int i = motion_from; i <= motion_to; i++) {
 		data.children[i]->notification(NOTIFICATION_MOVED_IN_PARENT);
 	}
-	for (const Map<StringName, GroupData>::Element *E = p_child->data.grouped.front(); E; E = E->next()) {
-		if (E->get().group) {
-			E->get().group->changed = true;
-		}
-	}
+	p_child->_propagate_groups_dirty();
 
 	data.blocked--;
 }
@@ -375,6 +440,18 @@ void Node::raise() {
 	}
 
 	data.parent->move_child(this, data.parent->data.children.size() - 1);
+}
+
+void Node::_propagate_groups_dirty() {
+	for (const Map<StringName, GroupData>::Element *E = data.grouped.front(); E; E = E->next()) {
+		if (E->get().group) {
+			E->get().group->changed = true;
+		}
+	}
+
+	for (int i = 0; i < data.children.size(); i++) {
+		data.children[i]->_propagate_groups_dirty();
+	}
 }
 
 void Node::add_child_notify(Node *p_child) {
@@ -388,6 +465,11 @@ void Node::remove_child_notify(Node *p_child) {
 void Node::move_child_notify(Node *p_child) {
 	// to be used when not wanted
 }
+
+void Node::owner_changed_notify() {
+}
+
+void Node::_physics_interpolated_changed() {}
 
 void Node::set_physics_process(bool p_process) {
 	if (data.physics_process == p_process) {
@@ -767,6 +849,44 @@ bool Node::can_process() const {
 	return true;
 }
 
+void Node::set_physics_interpolation_mode(PhysicsInterpolationMode p_mode) {
+	if (data.physics_interpolation_mode == p_mode) {
+		return;
+	}
+
+	data.physics_interpolation_mode = p_mode;
+
+	bool interpolate = true; // default for root node
+
+	switch (p_mode) {
+		case PHYSICS_INTERPOLATION_MODE_INHERIT: {
+			if (is_inside_tree() && data.parent) {
+				interpolate = data.parent->is_physics_interpolated();
+			}
+		} break;
+		case PHYSICS_INTERPOLATION_MODE_OFF: {
+			interpolate = false;
+		} break;
+		case PHYSICS_INTERPOLATION_MODE_ON: {
+			interpolate = true;
+		} break;
+	}
+
+	// if swapping from interpolated to non-interpolated, use this as
+	// an extra means to cause a reset
+	if (is_physics_interpolated() && !interpolate) {
+		reset_physics_interpolation();
+	}
+
+	_propagate_physics_interpolated(interpolate);
+}
+
+void Node::reset_physics_interpolation() {
+	if (is_physics_interpolated_and_enabled()) {
+		propagate_notification(NOTIFICATION_RESET_PHYSICS_INTERPOLATION);
+	}
+}
+
 float Node::get_physics_process_delta_time() const {
 	if (data.tree) {
 		return data.tree->get_physics_process_time();
@@ -913,6 +1033,18 @@ bool Node::is_processing_unhandled_key_input() const {
 	return data.unhandled_key_input;
 }
 
+void Node::_set_physics_interpolated_client_side(bool p_enable) {
+	data.physics_interpolated_client_side = p_enable;
+}
+
+void Node::_set_physics_interpolation_reset_requested(bool p_enable) {
+	data.physics_interpolation_reset_requested = p_enable;
+}
+
+void Node::_set_use_identity_transform(bool p_enable) {
+	data.use_identity_transform = p_enable;
+}
+
 StringName Node::get_name() const {
 	return data.name;
 }
@@ -925,10 +1057,18 @@ void Node::set_name(const String &p_name) {
 	String name = p_name.validate_node_name();
 
 	ERR_FAIL_COND(name == "");
+
+	if (data.unique_name_in_owner && data.owner) {
+		_release_unique_name_in_owner();
+	}
 	data.name = name;
 
 	if (data.parent) {
 		data.parent->_validate_child_name(this);
+	}
+
+	if (data.unique_name_in_owner && data.owner) {
+		_acquire_unique_name_in_owner();
 	}
 
 	propagate_notification(NOTIFICATION_PATH_CHANGED);
@@ -1136,9 +1276,15 @@ void Node::_add_child_nocheck(Node *p_child, const StringName &p_name) {
 	//recognize children created in this node constructor
 	p_child->data.parent_owned = data.in_constructor;
 	add_child_notify(p_child);
+
+	// Allow physics interpolated nodes to automatically reset when added to the tree
+	// (this is to save the user doing this manually each time)
+	if (is_inside_tree() && get_tree()->is_physics_interpolation_enabled()) {
+		p_child->_propagate_physics_interpolation_reset_requested();
+	}
 }
 
-void Node::add_child(Node *p_child, bool p_legible_unique_name) {
+void Node::add_child(Node *p_child, bool p_force_readable_name) {
 	ERR_FAIL_NULL(p_child);
 	ERR_FAIL_COND_MSG(p_child == this, vformat("Can't add child '%s' to itself.", p_child->get_name())); // adding to itself!
 	ERR_FAIL_COND_MSG(p_child->data.parent, vformat("Can't add child '%s' to '%s', already has a parent '%s'.", p_child->get_name(), get_name(), p_child->data.parent->get_name())); //Fail if node has a parent
@@ -1148,16 +1294,16 @@ void Node::add_child(Node *p_child, bool p_legible_unique_name) {
 	ERR_FAIL_COND_MSG(data.blocked > 0, "Parent node is busy setting up children, add_node() failed. Consider using call_deferred(\"add_child\", child) instead.");
 
 	/* Validate name */
-	_validate_child_name(p_child, p_legible_unique_name);
+	_validate_child_name(p_child, p_force_readable_name);
 
 	_add_child_nocheck(p_child, p_child->data.name);
 }
 
-void Node::add_child_below_node(Node *p_node, Node *p_child, bool p_legible_unique_name) {
+void Node::add_child_below_node(Node *p_node, Node *p_child, bool p_force_readable_name) {
 	ERR_FAIL_NULL(p_node);
 	ERR_FAIL_NULL(p_child);
 
-	add_child(p_child, p_legible_unique_name);
+	add_child(p_child, p_force_readable_name);
 
 	if (p_node->data.parent == this) {
 		move_child(p_child, p_node->get_position_in_parent() + 1);
@@ -1214,9 +1360,7 @@ void Node::remove_child(Node *p_child) {
 	p_child->data.parent = nullptr;
 	p_child->data.pos = -1;
 
-	if (data.inside_tree) {
-		p_child->_propagate_after_exit_tree();
-	}
+	p_child->_propagate_after_exit_branch(data.inside_tree);
 }
 
 int Node::get_child_count() const {
@@ -1280,6 +1424,24 @@ Node *Node::get_node_or_null(const NodePath &p_path) const {
 				next = root;
 			}
 
+		} else if (name.is_node_unique_name()) {
+			if (current->data.owned_unique_nodes.size()) {
+				// Has unique nodes in ownership
+				Node **unique = current->data.owned_unique_nodes.getptr(name);
+				if (!unique) {
+					return nullptr;
+				}
+				next = *unique;
+			} else if (current->data.owner) {
+				Node **unique = current->data.owner->data.owned_unique_nodes.getptr(name);
+				if (!unique) {
+					return nullptr;
+				}
+				next = *unique;
+			} else {
+				return nullptr;
+			}
+
 		} else {
 			next = nullptr;
 
@@ -1303,12 +1465,25 @@ Node *Node::get_node_or_null(const NodePath &p_path) const {
 
 Node *Node::get_node(const NodePath &p_path) const {
 	Node *node = get_node_or_null(p_path);
-	if (p_path.is_absolute()) {
-		ERR_FAIL_COND_V_MSG(!node, nullptr,
-				vformat("(Node not found: \"%s\" (absolute path attempted from \"%s\").)", p_path, get_path()));
-	} else {
-		ERR_FAIL_COND_V_MSG(!node, nullptr,
-				vformat("(Node not found: \"%s\" (relative to \"%s\").)", p_path, get_path()));
+	if (unlikely(!node)) {
+		// Try to get a clear description of this node in the error message.
+		String desc;
+		if (is_inside_tree()) {
+			desc = get_path();
+		} else {
+			desc = get_name();
+			if (desc.empty()) {
+				desc = get_class();
+			}
+		}
+
+		if (p_path.is_absolute()) {
+			ERR_FAIL_V_MSG(nullptr,
+					vformat("(Node not found: \"%s\" (absolute path attempted from \"%s\").)", p_path, desc));
+		} else {
+			ERR_FAIL_V_MSG(nullptr,
+					vformat("(Node not found: \"%s\" (relative to \"%s\").)", p_path, desc));
+		}
 	}
 
 	return node;
@@ -1452,10 +1627,58 @@ void Node::_set_owner_nocheck(Node *p_owner) {
 	data.owner = p_owner;
 	data.owner->data.owned.push_back(this);
 	data.OW = data.owner->data.owned.back();
+
+	owner_changed_notify();
+}
+
+void Node::_release_unique_name_in_owner() {
+	ERR_FAIL_NULL(data.owner); // Sanity check.
+	StringName key = StringName(UNIQUE_NODE_PREFIX + data.name.operator String());
+	Node **which = data.owner->data.owned_unique_nodes.getptr(key);
+	if (which == nullptr || *which != this) {
+		return; // Ignore.
+	}
+	data.owner->data.owned_unique_nodes.erase(key);
+}
+
+void Node::_acquire_unique_name_in_owner() {
+	ERR_FAIL_NULL(data.owner); // Sanity check.
+	StringName key = StringName(UNIQUE_NODE_PREFIX + data.name.operator String());
+	Node **which = data.owner->data.owned_unique_nodes.getptr(key);
+	if (which != nullptr && *which != this) {
+		WARN_PRINT(vformat(RTR("Setting node name '%s' to be unique within scene for '%s', but it's already claimed by '%s'. This node is no longer set unique."), get_name(), is_inside_tree() ? get_path() : data.owner->get_path_to(this), is_inside_tree() ? (*which)->get_path() : data.owner->get_path_to(*which)));
+		data.unique_name_in_owner = false;
+		return;
+	}
+	data.owner->data.owned_unique_nodes[key] = this;
+}
+
+void Node::set_unique_name_in_owner(bool p_enabled) {
+	if (data.unique_name_in_owner == p_enabled) {
+		return;
+	}
+
+	if (data.unique_name_in_owner && data.owner != nullptr) {
+		_release_unique_name_in_owner();
+	}
+	data.unique_name_in_owner = p_enabled;
+
+	if (data.unique_name_in_owner && data.owner != nullptr) {
+		_acquire_unique_name_in_owner();
+	}
+
+	update_configuration_warning();
+}
+
+bool Node::is_unique_name_in_owner() const {
+	return data.unique_name_in_owner;
 }
 
 void Node::set_owner(Node *p_owner) {
 	if (data.owner) {
+		if (data.unique_name_in_owner) {
+			_release_unique_name_in_owner();
+		}
 		data.owner->data.owned.erase(data.OW);
 		data.OW = nullptr;
 		data.owner = nullptr;
@@ -1482,6 +1705,10 @@ void Node::set_owner(Node *p_owner) {
 	ERR_FAIL_COND(!owner_valid);
 
 	_set_owner_nocheck(p_owner);
+
+	if (data.unique_name_in_owner) {
+		_acquire_unique_name_in_owner();
+	}
 }
 Node *Node::get_owner() const {
 	return data.owner;
@@ -1757,6 +1984,14 @@ void Node::_propagate_replace_owner(Node *p_owner, Node *p_by_owner) {
 int Node::get_index() const {
 	return data.pos;
 }
+
+Ref<SceneTreeTween> Node::create_tween() {
+	ERR_FAIL_COND_V_MSG(!data.tree, nullptr, "Can't create SceneTreeTween when not inside scene tree.");
+	Ref<SceneTreeTween> tween = get_tree()->create_tween();
+	tween->bind_node(this);
+	return tween;
+}
+
 void Node::remove_and_skip() {
 	ERR_FAIL_COND(!data.parent);
 
@@ -1902,6 +2137,8 @@ void Node::get_storable_properties(Set<StringName> &r_storable_properties) const
 }
 
 String Node::to_string() {
+	// This code doesn't print the script's name, it calls to_string() if you override it in a Node's script,
+	// which you only do if you specifically want to customize how the node should be represented by print().
 	if (get_script_instance()) {
 		bool valid;
 		String ret = get_script_instance()->to_string(&valid);
@@ -2626,7 +2863,16 @@ static void _Node_debug_sn(Object *p_obj) {
 	} else {
 		path = String(p->get_name()) + "/" + p->get_path_to(n);
 	}
-	print_line(itos(p_obj->get_instance_id()) + " - Stray Node: " + path + " (Type: " + n->get_class() + ")");
+
+	String script_file_string;
+	if (!n->get_script().is_null()) {
+		Ref<Script> script = n->get_script();
+		if (script.is_valid()) {
+			script_file_string = ", Script: " + script->get_path();
+		}
+	}
+
+	print_line(itos(p_obj->get_instance_id()) + " - Stray Node: " + path + " (Type: " + n->get_class() + script_file_string + ")");
 }
 #endif // DEBUG_ENABLED
 
@@ -2641,10 +2887,14 @@ void Node::print_stray_nodes() {
 }
 
 void Node::queue_delete() {
+	// There are users which instantiate multiple scene trees for their games.
+	// Use the node's own tree to handle its deletion when relevant.
 	if (is_inside_tree()) {
 		get_tree()->queue_delete(this);
 	} else {
-		SceneTree::get_singleton()->queue_delete(this);
+		SceneTree *tree = SceneTree::get_singleton();
+		ERR_FAIL_NULL_MSG(tree, "Can't queue free a node when no SceneTree is available.");
+		tree->queue_delete(this);
 	}
 }
 
@@ -2675,7 +2925,7 @@ NodePath Node::get_import_path() const {
 
 static void _add_nodes_to_options(const Node *p_base, const Node *p_node, List<String> *r_options) {
 #ifdef TOOLS_ENABLED
-	const String quote_style = EDITOR_DEF("text_editor/completion/use_single_quotes", 0) ? "'" : "\"";
+	const String quote_style = EDITOR_GET("text_editor/completion/use_single_quotes") ? "'" : "\"";
 #else
 	const String quote_style = "\"";
 #endif
@@ -2746,11 +2996,11 @@ void Node::_bind_methods() {
 	GLOBAL_DEF("node/name_casing", NAME_CASING_PASCAL_CASE);
 	ProjectSettings::get_singleton()->set_custom_property_info("node/name_casing", PropertyInfo(Variant::INT, "node/name_casing", PROPERTY_HINT_ENUM, "PascalCase,camelCase,snake_case"));
 
-	ClassDB::bind_method(D_METHOD("add_child_below_node", "node", "child_node", "legible_unique_name"), &Node::add_child_below_node, DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("add_child_below_node", "node", "child_node", "force_readable_name"), &Node::add_child_below_node, DEFVAL(false));
 
 	ClassDB::bind_method(D_METHOD("set_name", "name"), &Node::set_name);
 	ClassDB::bind_method(D_METHOD("get_name"), &Node::get_name);
-	ClassDB::bind_method(D_METHOD("add_child", "node", "legible_unique_name"), &Node::add_child, DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("add_child", "node", "force_readable_name"), &Node::add_child, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("remove_child", "node"), &Node::remove_child);
 	ClassDB::bind_method(D_METHOD("get_child_count"), &Node::get_child_count);
 	ClassDB::bind_method(D_METHOD("get_children"), &Node::_get_children);
@@ -2814,13 +3064,22 @@ void Node::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_physics_process_internal", "enable"), &Node::set_physics_process_internal);
 	ClassDB::bind_method(D_METHOD("is_physics_processing_internal"), &Node::is_physics_processing_internal);
 
+	ClassDB::bind_method(D_METHOD("set_physics_interpolation_mode", "mode"), &Node::set_physics_interpolation_mode);
+	ClassDB::bind_method(D_METHOD("get_physics_interpolation_mode"), &Node::get_physics_interpolation_mode);
+	ClassDB::bind_method(D_METHOD("is_physics_interpolated"), &Node::is_physics_interpolated);
+	ClassDB::bind_method(D_METHOD("is_physics_interpolated_and_enabled"), &Node::is_physics_interpolated_and_enabled);
+	ClassDB::bind_method(D_METHOD("reset_physics_interpolation"), &Node::reset_physics_interpolation);
+
 	ClassDB::bind_method(D_METHOD("get_tree"), &Node::get_tree);
+	ClassDB::bind_method(D_METHOD("create_tween"), &Node::create_tween);
 
 	ClassDB::bind_method(D_METHOD("duplicate", "flags"), &Node::duplicate, DEFVAL(DUPLICATE_USE_INSTANCING | DUPLICATE_SIGNALS | DUPLICATE_GROUPS | DUPLICATE_SCRIPTS));
 	ClassDB::bind_method(D_METHOD("replace_by", "node", "keep_data"), &Node::replace_by, DEFVAL(false));
 
 	ClassDB::bind_method(D_METHOD("set_scene_instance_load_placeholder", "load_placeholder"), &Node::set_scene_instance_load_placeholder);
 	ClassDB::bind_method(D_METHOD("get_scene_instance_load_placeholder"), &Node::get_scene_instance_load_placeholder);
+	ClassDB::bind_method(D_METHOD("set_editable_instance", "node", "is_editable"), &Node::set_editable_instance);
+	ClassDB::bind_method(D_METHOD("is_editable_instance", "node"), &Node::is_editable_instance);
 
 	ClassDB::bind_method(D_METHOD("get_viewport"), &Node::get_viewport);
 
@@ -2850,6 +3109,8 @@ void Node::_bind_methods() {
 #ifdef TOOLS_ENABLED
 	ClassDB::bind_method(D_METHOD("_set_property_pinned", "property", "pinned"), &Node::set_property_pinned);
 #endif
+	ClassDB::bind_method(D_METHOD("set_unique_name_in_owner", "enable"), &Node::set_unique_name_in_owner);
+	ClassDB::bind_method(D_METHOD("is_unique_name_in_owner"), &Node::is_unique_name_in_owner);
 
 	{
 		MethodInfo mi;
@@ -2893,6 +3154,7 @@ void Node::_bind_methods() {
 	BIND_CONSTANT(NOTIFICATION_INTERNAL_PROCESS);
 	BIND_CONSTANT(NOTIFICATION_INTERNAL_PHYSICS_PROCESS);
 	BIND_CONSTANT(NOTIFICATION_POST_ENTER_TREE);
+	BIND_CONSTANT(NOTIFICATION_RESET_PHYSICS_INTERPOLATION);
 
 	BIND_CONSTANT(NOTIFICATION_WM_MOUSE_ENTER);
 	BIND_CONSTANT(NOTIFICATION_WM_MOUSE_EXIT);
@@ -2913,6 +3175,10 @@ void Node::_bind_methods() {
 	BIND_ENUM_CONSTANT(PAUSE_MODE_STOP);
 	BIND_ENUM_CONSTANT(PAUSE_MODE_PROCESS);
 
+	BIND_ENUM_CONSTANT(PHYSICS_INTERPOLATION_MODE_INHERIT);
+	BIND_ENUM_CONSTANT(PHYSICS_INTERPOLATION_MODE_OFF);
+	BIND_ENUM_CONSTANT(PHYSICS_INTERPOLATION_MODE_ON);
+
 	BIND_ENUM_CONSTANT(DUPLICATE_SIGNALS);
 	BIND_ENUM_CONSTANT(DUPLICATE_GROUPS);
 	BIND_ENUM_CONSTANT(DUPLICATE_SCRIPTS);
@@ -2923,8 +3189,12 @@ void Node::_bind_methods() {
 	ADD_SIGNAL(MethodInfo("tree_entered"));
 	ADD_SIGNAL(MethodInfo("tree_exiting"));
 	ADD_SIGNAL(MethodInfo("tree_exited"));
+	ADD_SIGNAL(MethodInfo("child_entered_tree", PropertyInfo(Variant::OBJECT, "node", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT, "Node")));
+	ADD_SIGNAL(MethodInfo("child_exiting_tree", PropertyInfo(Variant::OBJECT, "node", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT, "Node")));
 
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "pause_mode", PROPERTY_HINT_ENUM, "Inherit,Stop,Process"), "set_pause_mode", "get_pause_mode");
+
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "physics_interpolation_mode", PROPERTY_HINT_ENUM, "Inherit,Off,On"), "set_physics_interpolation_mode", "get_physics_interpolation_mode");
 
 #ifdef ENABLE_DEPRECATED
 	//no longer exists, but remains for compatibility (keep previous scenes folded
@@ -2932,6 +3202,7 @@ void Node::_bind_methods() {
 #endif
 
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "name", PROPERTY_HINT_NONE, "", 0), "set_name", "get_name");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "unique_name_in_owner", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NOEDITOR), "set_unique_name_in_owner", "is_unique_name_in_owner");
 	ADD_PROPERTY(PropertyInfo(Variant::STRING, "filename", PROPERTY_HINT_NONE, "", 0), "set_filename", "get_filename");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "owner", PROPERTY_HINT_RESOURCE_TYPE, "Node", 0), "set_owner", "get_owner");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "multiplayer", PROPERTY_HINT_RESOURCE_TYPE, "MultiplayerAPI", 0), "", "get_multiplayer");
@@ -2976,6 +3247,10 @@ Node::Node() {
 	data.idle_process_internal = false;
 	data.inside_tree = false;
 	data.ready_notified = false;
+	data.physics_interpolated = true;
+	data.physics_interpolation_reset_requested = false;
+	data.physics_interpolated_client_side = false;
+	data.use_identity_transform = false;
 
 	data.owner = nullptr;
 	data.OW = nullptr;
@@ -2983,6 +3258,7 @@ Node::Node() {
 	data.unhandled_input = false;
 	data.unhandled_key_input = false;
 	data.pause_mode = PAUSE_MODE_INHERIT;
+	data.physics_interpolation_mode = PHYSICS_INTERPOLATION_MODE_INHERIT;
 	data.pause_owner = nullptr;
 	data.network_master = 1; //server by default
 	data.path_cache = nullptr;

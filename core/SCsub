@@ -134,6 +134,9 @@ if env["builtin_zstd"]:
         "decompress/zstd_decompress_block.c",
         "decompress/zstd_decompress.c",
     ]
+    if env["platform"] in ["android", "iphone", "osx", "server", "x11"]:
+        # Match platforms with ZSTD_ASM_SUPPORTED in common/portability_macros.h
+        thirdparty_zstd_sources.append("decompress/huf_decompress_amd64.S")
     thirdparty_zstd_sources = [thirdparty_zstd_dir + file for file in thirdparty_zstd_sources]
 
     env_thirdparty.Prepend(CPPPATH=[thirdparty_zstd_dir, thirdparty_zstd_dir + "common"])
@@ -152,6 +155,7 @@ env.core_sources += thirdparty_obj
 
 env.add_source_files(env.core_sources, "*.cpp")
 env.add_source_files(env.core_sources, "script_encryption_key.gen.cpp")
+env.add_source_files(env.core_sources, "version_hash.gen.cpp")
 
 # Certificates
 env.Depends(

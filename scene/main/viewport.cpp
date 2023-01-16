@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  viewport.cpp                                                         */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  viewport.cpp                                                          */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "viewport.h"
 
@@ -47,6 +47,7 @@
 #include "scene/gui/panel.h"
 #include "scene/gui/panel_container.h"
 #include "scene/gui/popup_menu.h"
+#include "scene/gui/viewport_container.h"
 #include "scene/main/canvas_layer.h"
 #include "scene/main/timer.h"
 #include "scene/resources/mesh.h"
@@ -182,6 +183,8 @@ public:
 
 Viewport::GUI::GUI() {
 	dragging = false;
+	drag_successful = false;
+	mouse_in_window = true;
 	mouse_focus = nullptr;
 	mouse_click_grabber = nullptr;
 	mouse_focus_mask = 0;
@@ -396,21 +399,26 @@ void Viewport::_notification(int p_what) {
 				_process_picking(false);
 			}
 		} break;
-		case SceneTree::NOTIFICATION_WM_MOUSE_EXIT: {
-			_drop_physics_mouseover();
-
-			// Unlike on loss of focus (NOTIFICATION_WM_WINDOW_FOCUS_OUT), do not
-			// drop the gui mouseover here, as a scrollbar may be dragged while the
-			// mouse is outside the window (without the window having lost focus).
-			// See bug #39634
+		case NOTIFICATION_WM_MOUSE_ENTER: {
+			gui.mouse_in_window = true;
 		} break;
-		case SceneTree::NOTIFICATION_WM_FOCUS_OUT: {
+		case NOTIFICATION_WM_MOUSE_EXIT: {
+			gui.mouse_in_window = false;
 			_drop_physics_mouseover();
-
+			_drop_mouse_over();
+			// When the mouse exits the window, we want to end mouse_over, but
+			// not mouse_focus, because, for example, we want to continue
+			// dragging a scrollbar even if the mouse has left the window.
+		} break;
+		case NOTIFICATION_WM_FOCUS_OUT: {
+			_drop_physics_mouseover();
 			if (gui.mouse_focus) {
-				//if mouse is being pressed, send a release event
 				_drop_mouse_focus();
 			}
+			// When the window focus changes, we want to end mouse_focus, but
+			// not the mouse_over. Note: The OS will trigger a separate mouse
+			// exit event if the change in focus results in the mouse exiting
+			// the window.
 		} break;
 	}
 }
@@ -545,7 +553,7 @@ void Viewport::_process_picking(bool p_ignore_paused) {
 				ObjectID canvas_layer_id;
 				if (E->get()) {
 					// A descendant CanvasLayer
-					canvas_transform = E->get()->get_transform();
+					canvas_transform = E->get()->get_final_transform();
 					canvas_layer_id = E->get()->get_instance_id();
 				} else {
 					// This Viewport's builtin canvas
@@ -714,8 +722,17 @@ void Viewport::set_size(const Size2 &p_size) {
 	size = p_size.floor();
 	VS::get_singleton()->viewport_set_size(viewport, size.width, size.height);
 
+	ViewportContainer *c = Object::cast_to<ViewportContainer>(get_parent());
+	if (c) {
+		c->minimum_size_changed();
+	}
+
 	_update_stretch_transform();
 	update_configuration_warning();
+
+	for (Set<ViewportTexture *>::Element *E = viewport_textures.front(); E; E = E->next()) {
+		E->get()->emit_changed();
+	}
 
 	emit_signal("size_changed");
 }
@@ -1381,6 +1398,9 @@ Vector2 Viewport::_get_window_offset() const {
 }
 
 Ref<InputEvent> Viewport::_make_input_local(const Ref<InputEvent> &ev) {
+	if (ev.is_null()) {
+		return ev;
+	}
 	Vector2 vp_ofs = _get_window_offset();
 	Transform2D ai = get_final_transform().affine_inverse() * _get_input_pre_xform();
 
@@ -1394,6 +1414,8 @@ void Viewport::_vp_input_text(const String &p_text) {
 }
 
 void Viewport::_vp_input(const Ref<InputEvent> &p_ev) {
+	ERR_FAIL_COND(p_ev.is_null());
+
 	if (disable_input) {
 		return;
 	}
@@ -1416,6 +1438,8 @@ void Viewport::_vp_input(const Ref<InputEvent> &p_ev) {
 }
 
 void Viewport::_vp_unhandled_input(const Ref<InputEvent> &p_ev) {
+	ERR_FAIL_COND(p_ev.is_null());
+
 	if (disable_input) {
 		return;
 	}
@@ -1851,9 +1875,6 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 
 	if (mb.is_valid()) {
 		gui.key_event_accepted = false;
-
-		Control *over = nullptr;
-
 		Point2 mpos = mb->get_position();
 		if (mb->is_pressed()) {
 			Size2 pos = mpos;
@@ -1972,8 +1993,9 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 
 			if (gui.drag_data.get_type() != Variant::NIL && mb->get_button_index() == BUTTON_LEFT) {
 				//alternate drop use (when using force_drag(), as proposed by #5342
+				gui.drag_successful = false;
 				if (gui.mouse_focus) {
-					_gui_drop(gui.mouse_focus, pos, false);
+					gui.drag_successful = _gui_drop(gui.mouse_focus, pos, false);
 				}
 
 				gui.drag_data = Variant();
@@ -1991,11 +2013,12 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 			_gui_cancel_tooltip();
 		} else {
 			if (gui.drag_data.get_type() != Variant::NIL && mb->get_button_index() == BUTTON_LEFT) {
+				gui.drag_successful = false;
 				if (gui.mouse_over) {
 					Size2 pos = mpos;
 					pos = gui.focus_inv_xform.xform(pos);
 
-					_gui_drop(gui.mouse_over, pos, false);
+					gui.drag_successful = _gui_drop(gui.mouse_over, pos, false);
 				}
 
 				Control *drag_preview = _gui_get_drag_preview();
@@ -2045,6 +2068,8 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 			// it is different, rather than wait for it to be updated the next time the
 			// mouse is moved, notify the control so that it can e.g. drop the highlight.
 			// This code is duplicated from the mm.is_valid()-case further below.
+
+			Control *over = nullptr;
 			if (gui.mouse_focus) {
 				over = gui.mouse_focus;
 			} else {
@@ -2052,9 +2077,7 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 			}
 
 			if (gui.mouse_focus_mask == 0 && over != gui.mouse_over) {
-				if (gui.mouse_over) {
-					_gui_call_notification(gui.mouse_over, Control::NOTIFICATION_MOUSE_EXIT);
-				}
+				_drop_mouse_over();
 
 				_gui_cancel_tooltip();
 
@@ -2076,8 +2099,6 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 		Point2 mpos = mm->get_position();
 
 		gui.last_mouse_pos = mpos;
-
-		Control *over = nullptr;
 
 		// D&D
 		if (!gui.drag_attempted && gui.mouse_focus && mm->get_button_mask() & BUTTON_MASK_LEFT) {
@@ -2125,12 +2146,10 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 			}
 		}
 
-		// These sections of code are reused in the mb.is_valid() case further up
-		// for the purpose of notifying controls about potential changes in focus
-		// when the mousebutton is released.
+		Control *over = nullptr;
 		if (gui.mouse_focus) {
 			over = gui.mouse_focus;
-		} else {
+		} else if (gui.mouse_in_window) {
 			over = _gui_find_control(mpos);
 		}
 
@@ -2164,6 +2183,8 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 					popup_menu->hide();
 
 					menu_button->pressed();
+					// As the popup wasn't triggered by a mouse click, the item focus needs to be removed manually.
+					menu_button->get_popup()->set_current_index(-1);
 				} else {
 					over = nullptr; //nothing can be found outside the modal stack
 				}
@@ -2171,18 +2192,15 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 		}
 
 		if (over != gui.mouse_over) {
-			if (gui.mouse_over) {
-				_gui_call_notification(gui.mouse_over, Control::NOTIFICATION_MOUSE_EXIT);
-			}
+			_drop_mouse_over();
 
 			_gui_cancel_tooltip();
 
 			if (over) {
 				_gui_call_notification(over, Control::NOTIFICATION_MOUSE_ENTER);
+				gui.mouse_over = over;
 			}
 		}
-
-		gui.mouse_over = over;
 
 		Control *drag_preview = _gui_get_drag_preview();
 		if (drag_preview) {
@@ -2228,8 +2246,6 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 						if (tooltip == gui.tooltip_label->get_text()) {
 							is_tooltip_shown = true;
 						}
-					} else if (tooltip == String(gui.tooltip_popup->call("get_tooltip_text"))) {
-						is_tooltip_shown = true;
 					}
 				} else {
 					_gui_cancel_tooltip();
@@ -2293,9 +2309,11 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 	Ref<InputEventScreenTouch> touch_event = p_event;
 	if (touch_event.is_valid()) {
 		Size2 pos = touch_event->get_position();
+		const int touch_index = touch_event->get_index();
 		if (touch_event->is_pressed()) {
 			Control *over = _gui_find_control(pos);
 			if (over) {
+				gui.touch_focus[touch_index] = over->get_instance_id();
 				if (!gui.modal_stack.empty()) {
 					Control *top = gui.modal_stack.back()->get();
 					if (over != top && !top->is_a_parent_of(over)) {
@@ -2311,18 +2329,26 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 					}
 					touch_event->set_position(pos);
 					_gui_call_input(over, touch_event);
+					set_input_as_handled();
 				}
-				set_input_as_handled();
 				return;
 			}
-		} else if (touch_event->get_index() == 0 && gui.last_mouse_focus) {
-			if (gui.last_mouse_focus->can_process()) {
+		} else {
+			ObjectID control_id = gui.touch_focus[touch_index];
+			Control *over = Object::cast_to<Control>(ObjectDB::get_instance(control_id));
+			if (over && over->can_process()) {
 				touch_event = touch_event->xformed_by(Transform2D()); //make a copy
-				touch_event->set_position(gui.focus_inv_xform.xform(pos));
+				if (over == gui.last_mouse_focus) {
+					pos = gui.focus_inv_xform.xform(pos);
+				} else {
+					pos = over->get_global_transform_with_canvas().affine_inverse().xform(pos);
+				}
+				touch_event->set_position(pos);
 
-				_gui_call_input(gui.last_mouse_focus, touch_event);
+				_gui_call_input(over, touch_event);
+				set_input_as_handled();
 			}
-			set_input_as_handled();
+			gui.touch_focus.erase(touch_index);
 			return;
 		}
 	}
@@ -2354,7 +2380,9 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 
 	Ref<InputEventScreenDrag> drag_event = p_event;
 	if (drag_event.is_valid()) {
-		Control *over = gui.mouse_focus;
+		const int drag_event_index = drag_event->get_index();
+		ObjectID control_id = gui.touch_focus[drag_event_index];
+		Control *over = Object::cast_to<Control>(ObjectDB::get_instance(control_id));
 		if (!over) {
 			over = _gui_find_control(drag_event->get_position());
 		}
@@ -2424,7 +2452,7 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 		//if (from && p_event->is_pressed() && !p_event->get_alt() && !p_event->get_metakey() && !p_event->key->get_command()) {
 
 		Ref<InputEventKey> k = p_event;
-		//need to check for mods, otherwise any combination of alt/ctrl/shift+<up/down/left/righ/etc> is handled here when it shouldn't be.
+		//need to check for mods, otherwise any combination of alt/ctrl/shift+<up/down/left/right/etc> is handled here when it shouldn't be.
 		bool mods = k.is_valid() && (k->get_control() || k->get_alt() || k->get_shift() || k->get_metakey());
 
 		if (from && p_event->is_pressed()) {
@@ -2458,11 +2486,11 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 					next = from->_get_focus_neighbour(MARGIN_BOTTOM);
 				}
 			} else {
-				if (p_event->is_action_pressed("ui_focus_next", true)) {
+				if (p_event->is_action_pressed("ui_focus_next", true, true)) {
 					next = from->find_next_valid_focus();
 				}
 
-				if (p_event->is_action_pressed("ui_focus_prev", true)) {
+				if (p_event->is_action_pressed("ui_focus_prev", true, true)) {
 					next = from->find_prev_valid_focus();
 				}
 
@@ -2487,6 +2515,17 @@ void Viewport::_gui_input_event(Ref<InputEvent> p_event) {
 				next->grab_focus();
 				set_input_as_handled();
 			}
+		}
+	}
+}
+
+void Viewport::_gui_cleanup_internal_state(Ref<InputEvent> p_event) {
+	ERR_FAIL_COND(p_event.is_null());
+
+	Ref<InputEventMouseButton> mb = p_event;
+	if (mb.is_valid()) {
+		if (!mb->is_pressed()) {
+			gui.mouse_focus_mask &= ~(1 << (mb->get_button_index() - 1)); // Remove from mask.
 		}
 	}
 }
@@ -2709,6 +2748,13 @@ void Viewport::_drop_mouse_focus() {
 	}
 }
 
+void Viewport::_drop_mouse_over() {
+	if (gui.mouse_over) {
+		_gui_call_notification(gui.mouse_over, Control::NOTIFICATION_MOUSE_EXIT);
+		gui.mouse_over = nullptr;
+	}
+}
+
 void Viewport::_drop_physics_mouseover(bool p_paused_only) {
 	physics_has_last_mousepos = false;
 
@@ -2839,6 +2885,8 @@ void Viewport::input(const Ref<InputEvent> &p_event) {
 
 	if (!is_input_handled()) {
 		_gui_input_event(p_event);
+	} else {
+		_gui_cleanup_internal_state(p_event);
 	}
 	//get_tree()->call_group(SceneTree::GROUP_CALL_REVERSE|SceneTree::GROUP_CALL_REALTIME|SceneTree::GROUP_CALL_MULIILEVEL,gui_input_group,"_gui_input",p_event); //special one for GUI, as controls use their own process check
 }
@@ -2867,8 +2915,8 @@ void Viewport::unhandled_input(const Ref<InputEvent> &p_event) {
 	}
 }
 
-void Viewport::set_use_own_world(bool p_world) {
-	if (p_world == own_world.is_valid()) {
+void Viewport::set_use_own_world(bool p_use_own_world) {
+	if (p_use_own_world == own_world.is_valid()) {
 		return;
 	}
 
@@ -2876,17 +2924,17 @@ void Viewport::set_use_own_world(bool p_world) {
 		_propagate_exit_world(this);
 	}
 
-	if (!p_world) {
-		own_world = Ref<World>();
-		if (world.is_valid()) {
-			world->disconnect(CoreStringNames::get_singleton()->changed, this, "_own_world_changed");
-		}
-	} else {
+	if (p_use_own_world) {
 		if (world.is_valid()) {
 			own_world = world->duplicate();
 			world->connect(CoreStringNames::get_singleton()->changed, this, "_own_world_changed");
 		} else {
 			own_world = Ref<World>(memnew(World));
+		}
+	} else {
+		own_world = Ref<World>();
+		if (world.is_valid()) {
+			world->disconnect(CoreStringNames::get_singleton()->changed, this, "_own_world_changed");
 		}
 	}
 
@@ -2952,6 +3000,14 @@ bool Viewport::gui_has_modal_stack() const {
 }
 
 void Viewport::set_disable_input(bool p_disable) {
+	if (p_disable == disable_input) {
+		return;
+	}
+	if (p_disable && GLOBAL_GET("gui/common/drop_mouse_on_gui_input_disabled")) {
+		_drop_mouse_focus();
+		_drop_mouse_over();
+		_gui_cancel_tooltip();
+	}
 	disable_input = p_disable;
 }
 
@@ -2986,11 +3042,6 @@ Control *Viewport::get_modal_stack_top() const {
 }
 
 String Viewport::get_configuration_warning() const {
-	/*if (get_parent() && !Object::cast_to<Control>(get_parent()) && !render_target) {
-
-		return TTR("This viewport is not set as render target. If you intend for it to display its contents directly to the screen, make it a child of a Control so it can obtain a size. Otherwise, make it a RenderTarget and assign its internal texture to some node for display.");
-	}*/
-
 	String warning = Node::get_configuration_warning();
 
 	if (size.x <= 1 || size.y <= 1) {
@@ -2999,6 +3050,14 @@ String Viewport::get_configuration_warning() const {
 		}
 		warning += TTR("The Viewport size must be greater than or equal to 2 pixels on both dimensions to render anything.");
 	}
+
+	if (!VisualServer::get_singleton()->is_low_end() && hdr && (usage == USAGE_2D || usage == USAGE_2D_NO_SAMPLING)) {
+		if (warning != String()) {
+			warning += "\n\n";
+		}
+		warning += TTR("This Viewport has HDR enabled, but its Usage is set to 2D or 2D No-Sampling.\nHDR is only supported in Viewports that have their Usage set to 3D or 3D No-Effects.\nHDR will be disabled for this Viewport.");
+	}
+
 	return warning;
 }
 
@@ -3065,6 +3124,7 @@ void Viewport::set_hdr(bool p_hdr) {
 
 	hdr = p_hdr;
 	VS::get_singleton()->viewport_set_hdr(viewport, p_hdr);
+	update_configuration_warning();
 }
 
 bool Viewport::get_hdr() const {
@@ -3085,8 +3145,13 @@ bool Viewport::is_using_32_bpc_depth() const {
 }
 
 void Viewport::set_usage(Usage p_usage) {
+	if (usage == p_usage) {
+		return;
+	}
+
 	usage = p_usage;
 	VS::get_singleton()->viewport_set_usage(viewport, VS::ViewportUsage(p_usage));
+	update_configuration_warning();
 }
 
 Viewport::Usage Viewport::get_usage() const {
@@ -3118,6 +3183,10 @@ bool Viewport::gui_is_dragging() const {
 	return gui.dragging;
 }
 
+bool Viewport::gui_is_drag_successful() const {
+	return gui.drag_successful;
+}
+
 void Viewport::set_input_as_handled() {
 	_drop_physics_mouseover();
 	if (handle_input_locally) {
@@ -3146,7 +3215,13 @@ bool Viewport::is_handling_input_locally() const {
 }
 
 void Viewport::_validate_property(PropertyInfo &property) const {
-	if (VisualServer::get_singleton()->is_low_end() && (property.name == "hdr" || property.name == "use_32_bpc_depth")) {
+	if (VisualServer::get_singleton()->is_low_end() && (property.name == "hdr" || property.name == "use_32_bpc_depth" || property.name == "debanding" || property.name == "sharpen_intensity" || property.name == "debug_draw")) {
+		// Only available in GLES3.
+		property.usage = PROPERTY_USAGE_NOEDITOR | PROPERTY_USAGE_INTERNAL;
+	}
+
+	if (!VisualServer::get_singleton()->is_low_end() && (property.name == "render_direct_to_screen")) {
+		// Only available in GLES2.
 		property.usage = PROPERTY_USAGE_NOEDITOR | PROPERTY_USAGE_INTERNAL;
 	}
 }
@@ -3251,6 +3326,7 @@ void Viewport::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("gui_has_modal_stack"), &Viewport::gui_has_modal_stack);
 	ClassDB::bind_method(D_METHOD("gui_get_drag_data"), &Viewport::gui_get_drag_data);
 	ClassDB::bind_method(D_METHOD("gui_is_dragging"), &Viewport::gui_is_dragging);
+	ClassDB::bind_method(D_METHOD("gui_is_drag_successful"), &Viewport::gui_is_drag_successful);
 
 	ClassDB::bind_method(D_METHOD("get_modal_stack_top"), &Viewport::get_modal_stack_top);
 
@@ -3301,7 +3377,7 @@ void Viewport::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "msaa", PROPERTY_HINT_ENUM, "Disabled,2x,4x,8x,16x,AndroidVR 2x,AndroidVR 4x"), "set_msaa", "get_msaa");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "fxaa"), "set_use_fxaa", "get_use_fxaa");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debanding"), "set_use_debanding", "get_use_debanding");
-	ADD_PROPERTY(PropertyInfo(Variant::REAL, "sharpen_intensity"), "set_sharpen_intensity", "get_sharpen_intensity");
+	ADD_PROPERTY(PropertyInfo(Variant::REAL, "sharpen_intensity", PROPERTY_HINT_RANGE, "0,1"), "set_sharpen_intensity", "get_sharpen_intensity");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "hdr"), "set_hdr", "get_hdr");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_32_bpc_depth"), "set_use_32_bpc_depth", "get_use_32_bpc_depth");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "disable_3d"), "set_disable_3d", "is_3d_disabled");
@@ -3322,7 +3398,7 @@ void Viewport::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "gui_disable_input"), "set_disable_input", "is_input_disabled");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "gui_snap_controls_to_pixels"), "set_snap_controls_to_pixels", "is_snap_controls_to_pixels_enabled");
 	ADD_GROUP("Shadow Atlas", "shadow_atlas_");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "shadow_atlas_size"), "set_shadow_atlas_size", "get_shadow_atlas_size");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "shadow_atlas_size", PROPERTY_HINT_RANGE, "0,16384,256"), "set_shadow_atlas_size", "get_shadow_atlas_size");
 	ADD_PROPERTYI(PropertyInfo(Variant::INT, "shadow_atlas_quad_0", PROPERTY_HINT_ENUM, "Disabled,1 Shadow,4 Shadows,16 Shadows,64 Shadows,256 Shadows,1024 Shadows"), "set_shadow_atlas_quadrant_subdiv", "get_shadow_atlas_quadrant_subdiv", 0);
 	ADD_PROPERTYI(PropertyInfo(Variant::INT, "shadow_atlas_quad_1", PROPERTY_HINT_ENUM, "Disabled,1 Shadow,4 Shadows,16 Shadows,64 Shadows,256 Shadows,1024 Shadows"), "set_shadow_atlas_quadrant_subdiv", "get_shadow_atlas_quadrant_subdiv", 1);
 	ADD_PROPERTYI(PropertyInfo(Variant::INT, "shadow_atlas_quad_2", PROPERTY_HINT_ENUM, "Disabled,1 Shadow,4 Shadows,16 Shadows,64 Shadows,256 Shadows,1024 Shadows"), "set_shadow_atlas_quadrant_subdiv", "get_shadow_atlas_quadrant_subdiv", 2);

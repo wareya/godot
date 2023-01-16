@@ -8,8 +8,8 @@ from collections import OrderedDict
 EXTRACT_TAGS = ["description", "brief_description", "member", "constant", "theme_item", "link"]
 HEADER = """\
 # LANGUAGE translation of the Godot Engine class reference.
-# Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.
-# Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).
+# Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md).
+# Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.
 # This file is distributed under the same license as the Godot source code.
 #
 # FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
@@ -218,10 +218,14 @@ def _make_translation_catalog(classes):
         desc_list = classes[class_name]
         for elem in desc_list.doc.iter():
             if elem.tag in EXTRACT_TAGS:
-                if not elem.text or len(elem.text) == 0:
+                elem_text = elem.text
+                if elem.tag == "link":
+                    elem_text = elem.attrib["title"] if "title" in elem.attrib else ""
+                if not elem_text or len(elem_text) == 0:
                     continue
-                line_no = elem._start_line_number if elem.text[0] != "\n" else elem._start_line_number + 1
-                desc_str = elem.text.strip()
+
+                line_no = elem._start_line_number if elem_text[0] != "\n" else elem._start_line_number + 1
+                desc_str = elem_text.strip()
                 code_block_regions = _make_codeblock_regions(desc_str, desc_list.path)
                 desc_msg = _strip_and_split_desc(desc_str, code_block_regions)
                 desc_obj = Desc(line_no, desc_msg, desc_list)

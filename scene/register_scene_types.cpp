@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  register_scene_types.cpp                                             */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  register_scene_types.cpp                                              */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "register_scene_types.h"
 
@@ -62,6 +62,7 @@
 #include "scene/2d/position_2d.h"
 #include "scene/2d/ray_cast_2d.h"
 #include "scene/2d/remote_transform_2d.h"
+#include "scene/2d/shape_cast_2d.h"
 #include "scene/2d/skeleton_2d.h"
 #include "scene/2d/sprite.h"
 #include "scene/2d/tile_map.h"
@@ -78,6 +79,7 @@
 #include "scene/animation/animation_tree.h"
 #include "scene/animation/animation_tree_player.h"
 #include "scene/animation/root_motion_view.h"
+#include "scene/animation/scene_tree_tween.h"
 #include "scene/animation/tween.h"
 #include "scene/audio/audio_stream_player.h"
 #include "scene/gui/aspect_ratio_container.h"
@@ -91,6 +93,7 @@
 #include "scene/gui/control.h"
 #include "scene/gui/dialogs.h"
 #include "scene/gui/file_dialog.h"
+#include "scene/gui/flow_container.h"
 #include "scene/gui/graph_edit.h"
 #include "scene/gui/graph_node.h"
 #include "scene/gui/grid_container.h"
@@ -188,6 +191,7 @@
 #include "scene/3d/gi_probe.h"
 #include "scene/3d/immediate_geometry.h"
 #include "scene/3d/interpolated_camera.h"
+#include "scene/3d/label_3d.h"
 #include "scene/3d/light.h"
 #include "scene/3d/listener.h"
 #include "scene/3d/mesh_instance.h"
@@ -210,6 +214,7 @@
 #include "scene/3d/room.h"
 #include "scene/3d/room_group.h"
 #include "scene/3d/room_manager.h"
+#include "scene/3d/shape_cast.h"
 #include "scene/3d/skeleton.h"
 #include "scene/3d/soft_body.h"
 #include "scene/3d/spring_arm.h"
@@ -220,6 +225,7 @@
 #include "scene/resources/environment.h"
 #include "scene/resources/mesh_library.h"
 #include "scene/resources/occluder_shape.h"
+#include "scene/resources/occluder_shape_polygon.h"
 #endif
 
 #include "modules/modules_enabled.gen.h" // For freetype.
@@ -335,6 +341,9 @@ void register_scene_types() {
 	ClassDB::register_class<CenterContainer>();
 	ClassDB::register_class<ScrollContainer>();
 	ClassDB::register_class<PanelContainer>();
+	ClassDB::register_virtual_class<FlowContainer>();
+	ClassDB::register_class<HFlowContainer>();
+	ClassDB::register_class<VFlowContainer>();
 
 	OS::get_singleton()->yield(); //may take time to init
 
@@ -387,6 +396,12 @@ void register_scene_types() {
 	ClassDB::register_class<Skeleton>();
 	ClassDB::register_class<AnimationPlayer>();
 	ClassDB::register_class<Tween>();
+	ClassDB::register_class<SceneTreeTween>();
+	ClassDB::register_virtual_class<Tweener>();
+	ClassDB::register_class<PropertyTweener>();
+	ClassDB::register_class<IntervalTweener>();
+	ClassDB::register_class<CallbackTweener>();
+	ClassDB::register_class<MethodTweener>();
 
 	ClassDB::register_class<AnimationTreePlayer>();
 	ClassDB::register_class<AnimationTree>();
@@ -429,6 +444,7 @@ void register_scene_types() {
 	ClassDB::register_virtual_class<SpriteBase3D>();
 	ClassDB::register_class<Sprite3D>();
 	ClassDB::register_class<AnimatedSprite3D>();
+	ClassDB::register_class<Label3D>();
 	ClassDB::register_virtual_class<Light>();
 	ClassDB::register_class<DirectionalLight>();
 	ClassDB::register_class<OmniLight>();
@@ -476,6 +492,7 @@ void register_scene_types() {
 	ClassDB::register_class<CollisionShape>();
 	ClassDB::register_class<CollisionPolygon>();
 	ClassDB::register_class<RayCast>();
+	ClassDB::register_class<ShapeCast>();
 	ClassDB::register_class<MultiMeshInstance>();
 
 	ClassDB::register_class<Curve3D>();
@@ -596,6 +613,7 @@ void register_scene_types() {
 	ClassDB::register_class<CollisionShape2D>();
 	ClassDB::register_class<CollisionPolygon2D>();
 	ClassDB::register_class<RayCast2D>();
+	ClassDB::register_class<ShapeCast2D>();
 	ClassDB::register_class<VisibilityNotifier2D>();
 	ClassDB::register_class<VisibilityEnabler2D>();
 	ClassDB::register_class<Polygon2D>();
@@ -646,6 +664,8 @@ void register_scene_types() {
 	ClassDB::register_class<PrismMesh>();
 	ClassDB::register_class<QuadMesh>();
 	ClassDB::register_class<SphereMesh>();
+	ClassDB::register_class<TextMesh>();
+	ClassDB::register_class<TorusMesh>();
 	ClassDB::register_class<PointMesh>();
 	ClassDB::register_virtual_class<Material>();
 	ClassDB::register_class<SpatialMaterial>();
@@ -668,6 +688,7 @@ void register_scene_types() {
 	ClassDB::register_class<ConcavePolygonShape>();
 	ClassDB::register_virtual_class<OccluderShape>();
 	ClassDB::register_class<OccluderShapeSphere>();
+	ClassDB::register_class<OccluderShapePolygon>();
 
 	OS::get_singleton()->yield(); //may take time to init
 
@@ -772,14 +793,19 @@ void register_scene_types() {
 	OS::get_singleton()->yield(); //may take time to init
 
 	for (int i = 0; i < 20; i++) {
-		GLOBAL_DEF("layer_names/2d_render/layer_" + itos(i + 1), "");
-		GLOBAL_DEF("layer_names/3d_render/layer_" + itos(i + 1), "");
+		GLOBAL_DEF(vformat("%s/layer_%d", PNAME("layer_names/2d_render"), i + 1), "");
+		GLOBAL_DEF(vformat("%s/layer_%d", PNAME("layer_names/3d_render"), i + 1), "");
 	}
 
 	for (int i = 0; i < 32; i++) {
-		GLOBAL_DEF("layer_names/2d_physics/layer_" + itos(i + 1), "");
-		GLOBAL_DEF("layer_names/3d_physics/layer_" + itos(i + 1), "");
+		GLOBAL_DEF(vformat("%s/layer_%d", PNAME("layer_names/2d_physics"), i + 1), "");
+		GLOBAL_DEF(vformat("%s/layer_%d", PNAME("layer_names/3d_physics"), i + 1), "");
 	}
+
+	for (int i = 0; i < 32; i++) {
+		GLOBAL_DEF(vformat("%s/layer_%d", PNAME("layer_names/2d_navigation"), i + 1), "");
+		GLOBAL_DEF(vformat("%s/layer_%d", PNAME("layer_names/3d_navigation"), i + 1), "");
+	};
 }
 
 void initialize_theme() {

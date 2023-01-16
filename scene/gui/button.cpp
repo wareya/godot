@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  button.cpp                                                           */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  button.cpp                                                            */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "button.h"
 
@@ -34,7 +34,7 @@
 #include "servers/visual_server.h"
 
 Size2 Button::get_minimum_size() const {
-	Size2 minsize = get_font("font")->get_string_size(xl_text);
+	Size2 minsize = get_font("font")->total_size_of_lines(xl_text.split("\n"));
 	if (clip_text) {
 		minsize.width = 0;
 	}
@@ -49,9 +49,14 @@ Size2 Button::get_minimum_size() const {
 
 		if (!_icon.is_null()) {
 			minsize.height = MAX(minsize.height, _icon->get_height());
-			minsize.width += _icon->get_width();
-			if (xl_text != "") {
-				minsize.width += get_constant("hseparation");
+
+			if (icon_align != ALIGN_CENTER) {
+				minsize.width += _icon->get_width();
+				if (xl_text != "") {
+					minsize.width += get_constant("hseparation");
+				}
+			} else {
+				minsize.width = MAX(minsize.width, _icon->get_width());
 			}
 		}
 	}
@@ -78,6 +83,8 @@ void Button::_notification(int p_what) {
 
 			Ref<StyleBox> style = get_stylebox("normal");
 
+			Vector<String> lines = xl_text.split("\n");
+
 			switch (get_draw_mode()) {
 				case DRAW_NORMAL: {
 					style = get_stylebox("normal");
@@ -99,7 +106,7 @@ void Button::_notification(int p_what) {
 					}
 				} break;
 				case DRAW_HOVER_PRESSED: {
-					if (has_stylebox("hover_pressed") && has_stylebox_override("hover_pressed")) {
+					if (has_stylebox("hover_pressed")) {
 						style = get_stylebox("hover_pressed");
 						if (!flat) {
 							style->draw(ci, Rect2(Point2(0, 0), size));
@@ -151,8 +158,9 @@ void Button::_notification(int p_what) {
 					color = get_color("font_color_disabled");
 					if (has_color("icon_color_disabled")) {
 						color_icon = get_color("icon_color_disabled");
+					} else {
+						color_icon.a = 0.4;
 					}
-
 				} break;
 			}
 
@@ -172,20 +180,31 @@ void Button::_notification(int p_what) {
 			Rect2 icon_region = Rect2();
 			if (!_icon.is_null()) {
 				int valign = size.height - style->get_minimum_size().y;
-				if (is_disabled()) {
-					color_icon.a = 0.4;
-				}
 
 				float icon_ofs_region = 0;
-				if (_internal_margin[MARGIN_LEFT] > 0) {
-					icon_ofs_region = _internal_margin[MARGIN_LEFT] + get_constant("hseparation");
+				Point2 style_offset;
+				Size2 icon_size = _icon->get_size();
+				if (icon_align == ALIGN_LEFT) {
+					style_offset.x = style->get_margin(MARGIN_LEFT);
+					if (_internal_margin[MARGIN_LEFT] > 0) {
+						icon_ofs_region = _internal_margin[MARGIN_LEFT] + get_constant("hseparation");
+					}
+				} else if (icon_align == ALIGN_CENTER) {
+					style_offset.x = 0;
+				} else if (icon_align == ALIGN_RIGHT) {
+					style_offset.x = -style->get_margin(MARGIN_RIGHT);
+					if (_internal_margin[MARGIN_RIGHT] > 0) {
+						icon_ofs_region = -_internal_margin[MARGIN_RIGHT] - get_constant("hseparation");
+					}
 				}
+				style_offset.y = style->get_margin(MARGIN_TOP);
 
 				if (expand_icon) {
 					Size2 _size = get_size() - style->get_offset() * 2;
-					_size.width -= get_constant("hseparation") + icon_ofs_region;
-					if (!clip_text) {
-						_size.width -= get_font("font")->get_string_size(xl_text).width;
+					int icon_text_separation = text.empty() ? 0 : get_constant("h_separation");
+					_size.width -= icon_text_separation + icon_ofs_region;
+					if (!clip_text && icon_align != ALIGN_CENTER) {
+						_size.width -= get_font("font")->total_size_of_lines(lines).width;
 					}
 					float icon_width = _icon->get_width() * _size.height / _icon->get_height();
 					float icon_height = _size.height;
@@ -195,13 +214,26 @@ void Button::_notification(int p_what) {
 						icon_height = _icon->get_height() * icon_width / _icon->get_width();
 					}
 
-					icon_region = Rect2(style->get_offset() + Point2(icon_ofs_region, (_size.height - icon_height) / 2), Size2(icon_width, icon_height));
+					icon_size = Size2(icon_width, icon_height);
+				}
+
+				if (icon_align == ALIGN_LEFT) {
+					icon_region = Rect2(style_offset + Point2(icon_ofs_region, Math::floor((valign - icon_size.y) * 0.5)), icon_size);
+				} else if (icon_align == ALIGN_CENTER) {
+					icon_region = Rect2(style_offset + Point2(icon_ofs_region + Math::floor((size.x - icon_size.x) * 0.5), Math::floor((valign - icon_size.y) * 0.5)), icon_size);
 				} else {
-					icon_region = Rect2(style->get_offset() + Point2(icon_ofs_region, Math::floor((valign - _icon->get_height()) / 2.0)), _icon->get_size());
+					icon_region = Rect2(style_offset + Point2(icon_ofs_region + size.x - icon_size.x, Math::floor((valign - icon_size.y) * 0.5)), icon_size);
+				}
+
+				if (icon_region.size.width > 0) {
+					draw_texture_rect_region(_icon, icon_region, Rect2(Point2(), _icon->get_size()), color_icon);
 				}
 			}
 
 			Point2 icon_ofs = !_icon.is_null() ? Point2(icon_region.size.width + get_constant("hseparation"), 0) : Point2();
+			if (align == ALIGN_CENTER && icon_align == ALIGN_CENTER) {
+				icon_ofs.x = 0;
+			}
 			int text_clip = size.width - style->get_minimum_size().width - icon_ofs.width;
 			if (_internal_margin[MARGIN_LEFT] > 0) {
 				text_clip -= _internal_margin[MARGIN_LEFT] + get_constant("hseparation");
@@ -210,39 +242,50 @@ void Button::_notification(int p_what) {
 				text_clip -= _internal_margin[MARGIN_RIGHT] + get_constant("hseparation");
 			}
 
-			Point2 text_ofs = (size - style->get_minimum_size() - icon_ofs - font->get_string_size(xl_text) - Point2(_internal_margin[MARGIN_RIGHT] - _internal_margin[MARGIN_LEFT], 0)) / 2.0;
+			int num_lines = lines.size();
+			float line_height = font->get_height();
 
-			switch (align) {
-				case ALIGN_LEFT: {
-					if (_internal_margin[MARGIN_LEFT] > 0) {
-						text_ofs.x = style->get_margin(MARGIN_LEFT) + icon_ofs.x + _internal_margin[MARGIN_LEFT] + get_constant("hseparation");
-					} else {
-						text_ofs.x = style->get_margin(MARGIN_LEFT) + icon_ofs.x;
-					}
-					text_ofs.y += style->get_offset().y;
-				} break;
-				case ALIGN_CENTER: {
-					if (text_ofs.x < 0) {
-						text_ofs.x = 0;
-					}
-					text_ofs += icon_ofs;
-					text_ofs += style->get_offset();
-				} break;
-				case ALIGN_RIGHT: {
-					if (_internal_margin[MARGIN_RIGHT] > 0) {
-						text_ofs.x = size.x - style->get_margin(MARGIN_RIGHT) - font->get_string_size(xl_text).x - _internal_margin[MARGIN_RIGHT] - get_constant("hseparation");
-					} else {
-						text_ofs.x = size.x - style->get_margin(MARGIN_RIGHT) - font->get_string_size(xl_text).x;
-					}
-					text_ofs.y += style->get_offset().y;
-				} break;
-			}
+			for (int i = 0; i < num_lines; i++) {
+				String line_text = lines[i];
+				Point2 text_ofs = (size - style->get_minimum_size() - icon_ofs - font->get_string_size(line_text) - Point2(_internal_margin[MARGIN_RIGHT] - _internal_margin[MARGIN_LEFT], 0)) / 2.0;
+				switch (align) {
+					case ALIGN_LEFT: {
+						if (icon_align != ALIGN_LEFT) {
+							icon_ofs.x = 0;
+						}
+						if (_internal_margin[MARGIN_LEFT] > 0) {
+							text_ofs.x = style->get_margin(MARGIN_LEFT) + icon_ofs.x + _internal_margin[MARGIN_LEFT] + get_constant("hseparation");
+						} else {
+							text_ofs.x = style->get_margin(MARGIN_LEFT) + icon_ofs.x;
+						}
+						text_ofs.y += style->get_offset().y;
+					} break;
+					case ALIGN_CENTER: {
+						if (text_ofs.x < 0) {
+							text_ofs.x = 0;
+						}
+						if (icon_align == ALIGN_LEFT) {
+							text_ofs += icon_ofs;
+						}
+						text_ofs += style->get_offset();
+					} break;
+					case ALIGN_RIGHT: {
+						int text_width = font->get_string_size(line_text).x;
+						if (_internal_margin[MARGIN_RIGHT] > 0) {
+							text_ofs.x = size.x - style->get_margin(MARGIN_RIGHT) - text_width - _internal_margin[MARGIN_RIGHT] - get_constant("hseparation");
+						} else {
+							text_ofs.x = size.x - style->get_margin(MARGIN_RIGHT) - text_width;
+						}
+						text_ofs.y += style->get_offset().y;
+						if (icon_align == ALIGN_RIGHT) {
+							text_ofs.x -= icon_ofs.x;
+						}
+					} break;
+				}
 
-			text_ofs.y += font->get_ascent();
-			font->draw(ci, text_ofs.floor(), xl_text, color, clip_text ? text_clip : -1);
-
-			if (!_icon.is_null() && icon_region.size.width > 0) {
-				draw_texture_rect_region(_icon, icon_region, Rect2(Point2(), _icon->get_size()), color_icon);
+				text_ofs.y += font->get_ascent();
+				text_ofs.y += line_height * (((float)i) - (((float)(num_lines - 1)) / 2.0));
+				font->draw(ci, text_ofs.floor(), line_text, color, clip_text ? text_clip : -1);
 			}
 		} break;
 	}
@@ -315,29 +358,42 @@ Button::TextAlign Button::get_text_align() const {
 	return align;
 }
 
+void Button::set_icon_align(TextAlign p_align) {
+	icon_align = p_align;
+	minimum_size_changed();
+	update();
+}
+
+Button::TextAlign Button::get_icon_align() const {
+	return icon_align;
+}
+
 void Button::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_text", "text"), &Button::set_text);
 	ClassDB::bind_method(D_METHOD("get_text"), &Button::get_text);
 	ClassDB::bind_method(D_METHOD("set_button_icon", "texture"), &Button::set_icon);
 	ClassDB::bind_method(D_METHOD("get_button_icon"), &Button::get_icon);
-	ClassDB::bind_method(D_METHOD("set_expand_icon"), &Button::set_expand_icon);
-	ClassDB::bind_method(D_METHOD("is_expand_icon"), &Button::is_expand_icon);
 	ClassDB::bind_method(D_METHOD("set_flat", "enabled"), &Button::set_flat);
+	ClassDB::bind_method(D_METHOD("is_flat"), &Button::is_flat);
 	ClassDB::bind_method(D_METHOD("set_clip_text", "enabled"), &Button::set_clip_text);
 	ClassDB::bind_method(D_METHOD("get_clip_text"), &Button::get_clip_text);
 	ClassDB::bind_method(D_METHOD("set_text_align", "align"), &Button::set_text_align);
 	ClassDB::bind_method(D_METHOD("get_text_align"), &Button::get_text_align);
-	ClassDB::bind_method(D_METHOD("is_flat"), &Button::is_flat);
+	ClassDB::bind_method(D_METHOD("set_icon_align", "icon_align"), &Button::set_icon_align);
+	ClassDB::bind_method(D_METHOD("get_icon_align"), &Button::get_icon_align);
+	ClassDB::bind_method(D_METHOD("set_expand_icon", "enabled"), &Button::set_expand_icon);
+	ClassDB::bind_method(D_METHOD("is_expand_icon"), &Button::is_expand_icon);
 
 	BIND_ENUM_CONSTANT(ALIGN_LEFT);
 	BIND_ENUM_CONSTANT(ALIGN_CENTER);
 	BIND_ENUM_CONSTANT(ALIGN_RIGHT);
 
-	ADD_PROPERTY(PropertyInfo(Variant::STRING, "text", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_DEFAULT_INTL), "set_text", "get_text");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "text", PROPERTY_HINT_MULTILINE_TEXT, "", PROPERTY_USAGE_DEFAULT_INTL), "set_text", "get_text");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "icon", PROPERTY_HINT_RESOURCE_TYPE, "Texture"), "set_button_icon", "get_button_icon");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "flat"), "set_flat", "is_flat");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "clip_text"), "set_clip_text", "get_clip_text");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "align", PROPERTY_HINT_ENUM, "Left,Center,Right"), "set_text_align", "get_text_align");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "icon_align", PROPERTY_HINT_ENUM, "Left,Center,Right"), "set_icon_align", "get_icon_align");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "expand_icon"), "set_expand_icon", "is_expand_icon");
 }
 
@@ -348,6 +404,7 @@ Button::Button(const String &p_text) {
 	set_mouse_filter(MOUSE_FILTER_STOP);
 	set_text(p_text);
 	align = ALIGN_CENTER;
+	icon_align = ALIGN_LEFT;
 
 	for (int i = 0; i < 4; i++) {
 		_internal_margin[i] = 0;

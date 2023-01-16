@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  core_bind.cpp                                                        */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  core_bind.cpp                                                         */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "core_bind.h"
 
@@ -65,8 +65,8 @@ static const unsigned int MONTH_DAYS_TABLE[2][12] = {
 
 _ResourceLoader *_ResourceLoader::singleton = nullptr;
 
-Ref<ResourceInteractiveLoader> _ResourceLoader::load_interactive(const String &p_path, const String &p_type_hint) {
-	return ResourceLoader::load_interactive(p_path, p_type_hint);
+Ref<ResourceInteractiveLoader> _ResourceLoader::load_interactive(const String &p_path, const String &p_type_hint, bool p_no_cache) {
+	return ResourceLoader::load_interactive(p_path, p_type_hint, p_no_cache);
 }
 
 RES _ResourceLoader::load(const String &p_path, const String &p_type_hint, bool p_no_cache) {
@@ -121,7 +121,7 @@ bool _ResourceLoader::exists(const String &p_path, const String &p_type_hint) {
 }
 
 void _ResourceLoader::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("load_interactive", "path", "type_hint"), &_ResourceLoader::load_interactive, DEFVAL(""));
+	ClassDB::bind_method(D_METHOD("load_interactive", "path", "type_hint", "no_cache"), &_ResourceLoader::load_interactive, DEFVAL(""), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("load", "path", "type_hint", "no_cache"), &_ResourceLoader::load, DEFVAL(""), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("get_recognized_extensions_for_type", "type"), &_ResourceLoader::get_recognized_extensions_for_type);
 	ClassDB::bind_method(D_METHOD("set_abort_on_missing_resources", "abort"), &_ResourceLoader::set_abort_on_missing_resources);
@@ -188,6 +188,42 @@ void _OS::global_menu_remove_item(const String &p_menu, int p_idx) {
 
 void _OS::global_menu_clear(const String &p_menu) {
 	OS::get_singleton()->global_menu_clear(p_menu);
+}
+
+bool _OS::tts_is_speaking() const {
+	return OS::get_singleton()->tts_is_speaking();
+}
+
+bool _OS::tts_is_paused() const {
+	return OS::get_singleton()->tts_is_paused();
+}
+
+Array _OS::tts_get_voices() const {
+	return OS::get_singleton()->tts_get_voices();
+}
+
+PoolStringArray _OS::tts_get_voices_for_language(const String &p_language) const {
+	return OS::get_singleton()->tts_get_voices_for_language(p_language);
+}
+
+void _OS::tts_speak(const String &p_text, const String &p_voice, int p_volume, float p_pitch, float p_rate, int p_utterance_id, bool p_interrupt) {
+	OS::get_singleton()->tts_speak(p_text, p_voice, p_volume, p_pitch, p_rate, p_utterance_id, p_interrupt);
+}
+
+void _OS::tts_pause() {
+	OS::get_singleton()->tts_pause();
+}
+
+void _OS::tts_resume() {
+	OS::get_singleton()->tts_resume();
+}
+
+void _OS::tts_stop() {
+	OS::get_singleton()->tts_stop();
+}
+
+void _OS::tts_set_utterance_callback(TTSUtteranceEvent p_event, Object *p_object, String p_callback) {
+	OS::get_singleton()->tts_set_utterance_callback((OS::TTSUtteranceEvent)p_event, p_object, p_callback);
 }
 
 Point2 _OS::get_mouse_position() const {
@@ -311,6 +347,10 @@ float _OS::get_screen_max_scale() const {
 	return OS::get_singleton()->get_screen_max_scale();
 }
 
+float _OS::get_screen_refresh_rate(int p_screen) const {
+	return OS::get_singleton()->get_screen_refresh_rate();
+}
+
 Point2 _OS::get_window_position() const {
 	return OS::get_singleton()->get_window_position();
 }
@@ -349,6 +389,10 @@ void _OS::set_window_size(const Size2 &p_size) {
 
 Rect2 _OS::get_window_safe_area() const {
 	return OS::get_singleton()->get_window_safe_area();
+}
+
+Array _OS::get_display_cutouts() const {
+	return OS::get_singleton()->get_display_cutouts();
 }
 
 void _OS::set_window_fullscreen(bool p_enabled) {
@@ -500,6 +544,10 @@ Error _OS::kill(int p_pid) {
 	return OS::get_singleton()->kill(p_pid);
 }
 
+bool _OS::is_process_running(int p_pid) const {
+	return OS::get_singleton()->is_process_running(p_pid);
+}
+
 int _OS::get_process_id() const {
 	return OS::get_singleton()->get_process_id();
 };
@@ -526,6 +574,29 @@ Vector<String> _OS::get_cmdline_args() {
 	}
 
 	return cmdlinev;
+}
+
+void _OS::set_restart_on_exit(bool p_restart, const Vector<String> &p_restart_arguments) {
+	List<String> args_list;
+	for (int i = 0; i < p_restart_arguments.size(); i++) {
+		args_list.push_back(p_restart_arguments[i]);
+	}
+
+	::OS::get_singleton()->set_restart_on_exit(p_restart, args_list);
+}
+
+bool _OS::is_restart_on_exit_set() const {
+	return ::OS::get_singleton()->is_restart_on_exit_set();
+}
+
+Vector<String> _OS::get_restart_on_exit_arguments() const {
+	List<String> args = ::OS::get_singleton()->get_restart_on_exit_arguments();
+	Vector<String> args_vector;
+	for (List<String>::Element *E = args.front(); E; E = E->next()) {
+		args_vector.push_back(E->get());
+	}
+
+	return args_vector;
 }
 
 String _OS::get_locale() const {
@@ -960,6 +1031,10 @@ int _OS::get_processor_count() const {
 	return OS::get_singleton()->get_processor_count();
 }
 
+String _OS::get_processor_name() const {
+	return OS::get_singleton()->get_processor_name();
+}
+
 bool _OS::is_stdout_verbose() const {
 	return OS::get_singleton()->is_stdout_verbose();
 }
@@ -1070,8 +1145,8 @@ bool _OS::has_virtual_keyboard() const {
 	return OS::get_singleton()->has_virtual_keyboard();
 }
 
-void _OS::show_virtual_keyboard(const String &p_existing_text, bool p_multiline) {
-	OS::get_singleton()->show_virtual_keyboard(p_existing_text, Rect2(), p_multiline);
+void _OS::show_virtual_keyboard(const String &p_existing_text, _OS::VirtualKeyboardType p_type) {
+	OS::get_singleton()->show_virtual_keyboard(p_existing_text, Rect2(), OS::VirtualKeyboardType(p_type));
 }
 
 void _OS::hide_virtual_keyboard() {
@@ -1092,6 +1167,10 @@ void _OS::print_resources_in_use(bool p_short) {
 
 void _OS::dump_resources_to_file(const String &p_file) {
 	OS::get_singleton()->dump_resources_to_file(p_file.utf8().get_data());
+}
+
+Error _OS::move_to_trash(const String &p_path) const {
+	return OS::get_singleton()->move_to_trash(p_path);
 }
 
 String _OS::get_user_data_dir() const {
@@ -1240,6 +1319,18 @@ void _OS::_bind_methods() {
 	//ClassDB::bind_method(D_METHOD("is_video_mode_resizable","screen"),&_OS::is_video_mode_resizable,DEFVAL(0));
 	//ClassDB::bind_method(D_METHOD("get_fullscreen_mode_list","screen"),&_OS::get_fullscreen_mode_list,DEFVAL(0));
 
+	ClassDB::bind_method(D_METHOD("tts_is_speaking"), &_OS::tts_is_speaking);
+	ClassDB::bind_method(D_METHOD("tts_is_paused"), &_OS::tts_is_paused);
+	ClassDB::bind_method(D_METHOD("tts_get_voices"), &_OS::tts_get_voices);
+	ClassDB::bind_method(D_METHOD("tts_get_voices_for_language", "language"), &_OS::tts_get_voices_for_language);
+
+	ClassDB::bind_method(D_METHOD("tts_speak", "text", "voice", "volume", "pitch", "rate", "utterance_id", "interrupt"), &_OS::tts_speak, DEFVAL(50), DEFVAL(1.f), DEFVAL(1.f), DEFVAL(0), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("tts_pause"), &_OS::tts_pause);
+	ClassDB::bind_method(D_METHOD("tts_resume"), &_OS::tts_resume);
+	ClassDB::bind_method(D_METHOD("tts_stop"), &_OS::tts_stop);
+
+	ClassDB::bind_method(D_METHOD("tts_set_utterance_callback", "event", "object", "callback"), &_OS::tts_set_utterance_callback);
+
 	ClassDB::bind_method(D_METHOD("global_menu_add_item", "menu", "label", "id", "meta"), &_OS::global_menu_add_item);
 	ClassDB::bind_method(D_METHOD("global_menu_add_separator", "menu"), &_OS::global_menu_add_separator);
 	ClassDB::bind_method(D_METHOD("global_menu_remove_item", "menu", "idx"), &_OS::global_menu_remove_item);
@@ -1263,6 +1354,7 @@ void _OS::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_screen_dpi", "screen"), &_OS::get_screen_dpi, DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("get_screen_scale", "screen"), &_OS::get_screen_scale, DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("get_screen_max_scale"), &_OS::get_screen_max_scale);
+	ClassDB::bind_method(D_METHOD("get_screen_refresh_rate", "screen"), &_OS::get_screen_refresh_rate, DEFVAL(-1));
 	ClassDB::bind_method(D_METHOD("get_window_position"), &_OS::get_window_position);
 	ClassDB::bind_method(D_METHOD("set_window_position", "position"), &_OS::set_window_position);
 	ClassDB::bind_method(D_METHOD("get_window_size"), &_OS::get_window_size);
@@ -1272,6 +1364,7 @@ void _OS::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_min_window_size", "size"), &_OS::set_min_window_size);
 	ClassDB::bind_method(D_METHOD("set_window_size", "size"), &_OS::set_window_size);
 	ClassDB::bind_method(D_METHOD("get_window_safe_area"), &_OS::get_window_safe_area);
+	ClassDB::bind_method(D_METHOD("get_display_cutouts"), &_OS::get_display_cutouts);
 	ClassDB::bind_method(D_METHOD("set_window_fullscreen", "enabled"), &_OS::set_window_fullscreen);
 	ClassDB::bind_method(D_METHOD("is_window_fullscreen"), &_OS::is_window_fullscreen);
 	ClassDB::bind_method(D_METHOD("set_window_resizable", "enabled"), &_OS::set_window_resizable);
@@ -1319,11 +1412,13 @@ void _OS::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_low_processor_usage_mode_sleep_usec"), &_OS::get_low_processor_usage_mode_sleep_usec);
 
 	ClassDB::bind_method(D_METHOD("get_processor_count"), &_OS::get_processor_count);
+	ClassDB::bind_method(D_METHOD("get_processor_name"), &_OS::get_processor_name);
 
 	ClassDB::bind_method(D_METHOD("get_executable_path"), &_OS::get_executable_path);
 	ClassDB::bind_method(D_METHOD("execute", "path", "arguments", "blocking", "output", "read_stderr", "open_console"), &_OS::execute, DEFVAL(true), DEFVAL(Array()), DEFVAL(false), DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("kill", "pid"), &_OS::kill);
 	ClassDB::bind_method(D_METHOD("shell_open", "uri"), &_OS::shell_open);
+	ClassDB::bind_method(D_METHOD("is_process_running", "pid"), &_OS::is_process_running);
 	ClassDB::bind_method(D_METHOD("get_process_id"), &_OS::get_process_id);
 
 	ClassDB::bind_method(D_METHOD("get_environment", "variable"), &_OS::get_environment);
@@ -1332,6 +1427,10 @@ void _OS::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("get_name"), &_OS::get_name);
 	ClassDB::bind_method(D_METHOD("get_cmdline_args"), &_OS::get_cmdline_args);
+
+	ClassDB::bind_method(D_METHOD("set_restart_on_exit", "restart", "arguments"), &_OS::set_restart_on_exit, DEFVAL(Vector<String>()));
+	ClassDB::bind_method(D_METHOD("is_restart_on_exit_set"), &_OS::is_restart_on_exit_set);
+	ClassDB::bind_method(D_METHOD("get_restart_on_exit_arguments"), &_OS::get_restart_on_exit_arguments);
 
 	ClassDB::bind_method(D_METHOD("get_datetime", "utc"), &_OS::get_datetime, DEFVAL(false));
 	ClassDB::bind_method(D_METHOD("get_date", "utc"), &_OS::get_date, DEFVAL(false));
@@ -1379,7 +1478,8 @@ void _OS::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("dump_memory_to_file", "file"), &_OS::dump_memory_to_file);
 	ClassDB::bind_method(D_METHOD("dump_resources_to_file", "file"), &_OS::dump_resources_to_file);
 	ClassDB::bind_method(D_METHOD("has_virtual_keyboard"), &_OS::has_virtual_keyboard);
-	ClassDB::bind_method(D_METHOD("show_virtual_keyboard", "existing_text", "multiline"), &_OS::show_virtual_keyboard, DEFVAL(""), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("show_virtual_keyboard", "existing_text", "multiline"), &_OS::_show_virtual_keyboard, DEFVAL(""), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("show_virtual_keyboard_type", "existing_text", "type"), &_OS::show_virtual_keyboard, DEFVAL(""), DEFVAL(_OS::KEYBOARD_TYPE_DEFAULT));
 	ClassDB::bind_method(D_METHOD("hide_virtual_keyboard"), &_OS::hide_virtual_keyboard);
 	ClassDB::bind_method(D_METHOD("get_virtual_keyboard_height"), &_OS::get_virtual_keyboard_height);
 	ClassDB::bind_method(D_METHOD("print_resources_in_use", "short"), &_OS::print_resources_in_use, DEFVAL(false));
@@ -1389,6 +1489,7 @@ void _OS::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_static_memory_peak_usage"), &_OS::get_static_memory_peak_usage);
 	ClassDB::bind_method(D_METHOD("get_dynamic_memory_usage"), &_OS::get_dynamic_memory_usage);
 
+	ClassDB::bind_method(D_METHOD("move_to_trash", "path"), &_OS::move_to_trash);
 	ClassDB::bind_method(D_METHOD("get_user_data_dir"), &_OS::get_user_data_dir);
 	ClassDB::bind_method(D_METHOD("get_system_dir", "dir", "shared_storage"), &_OS::get_system_dir, DEFVAL(true));
 	ClassDB::bind_method(D_METHOD("get_config_dir"), &_OS::get_config_dir);
@@ -1529,6 +1630,15 @@ void _OS::_bind_methods() {
 	BIND_ENUM_CONSTANT(SCREEN_ORIENTATION_SENSOR_PORTRAIT);
 	BIND_ENUM_CONSTANT(SCREEN_ORIENTATION_SENSOR);
 
+	BIND_ENUM_CONSTANT(KEYBOARD_TYPE_DEFAULT);
+	BIND_ENUM_CONSTANT(KEYBOARD_TYPE_MULTILINE);
+	BIND_ENUM_CONSTANT(KEYBOARD_TYPE_NUMBER);
+	BIND_ENUM_CONSTANT(KEYBOARD_TYPE_NUMBER_DECIMAL);
+	BIND_ENUM_CONSTANT(KEYBOARD_TYPE_PHONE);
+	BIND_ENUM_CONSTANT(KEYBOARD_TYPE_EMAIL_ADDRESS);
+	BIND_ENUM_CONSTANT(KEYBOARD_TYPE_PASSWORD);
+	BIND_ENUM_CONSTANT(KEYBOARD_TYPE_URL);
+
 	BIND_ENUM_CONSTANT(SYSTEM_DIR_DESKTOP);
 	BIND_ENUM_CONSTANT(SYSTEM_DIR_DCIM);
 	BIND_ENUM_CONSTANT(SYSTEM_DIR_DOCUMENTS);
@@ -1543,6 +1653,11 @@ void _OS::_bind_methods() {
 	BIND_ENUM_CONSTANT(POWERSTATE_NO_BATTERY);
 	BIND_ENUM_CONSTANT(POWERSTATE_CHARGING);
 	BIND_ENUM_CONSTANT(POWERSTATE_CHARGED);
+
+	BIND_ENUM_CONSTANT(TTS_UTTERANCE_STARTED);
+	BIND_ENUM_CONSTANT(TTS_UTTERANCE_ENDED);
+	BIND_ENUM_CONSTANT(TTS_UTTERANCE_CANCELED);
+	BIND_ENUM_CONSTANT(TTS_UTTERANCE_BOUNDARY);
 }
 
 _OS::_OS() {
@@ -2063,19 +2178,13 @@ PoolVector<uint8_t> _File::get_buffer(int64_t p_length) const {
 	return data;
 }
 
-String _File::get_as_text() const {
+String _File::get_as_text(bool p_skip_cr) const {
 	ERR_FAIL_COND_V_MSG(!f, String(), "File must be opened before use.");
 
-	String text;
 	uint64_t original_pos = f->get_position();
 	f->seek(0);
 
-	String l = get_line();
-	while (!eof_reached()) {
-		text += l + "\n";
-		l = get_line();
-	}
-	text += l;
+	String text = f->get_as_utf8_string(p_skip_cr);
 
 	f->seek(original_pos);
 
@@ -2267,7 +2376,7 @@ void _File::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_buffer", "len"), &_File::get_buffer);
 	ClassDB::bind_method(D_METHOD("get_line"), &_File::get_line);
 	ClassDB::bind_method(D_METHOD("get_csv_line", "delim"), &_File::get_csv_line, DEFVAL(","));
-	ClassDB::bind_method(D_METHOD("get_as_text"), &_File::get_as_text);
+	ClassDB::bind_method(D_METHOD("get_as_text", "skip_cr"), &_File::get_as_text, DEFVAL(true));
 	ClassDB::bind_method(D_METHOD("get_md5", "path"), &_File::get_md5);
 	ClassDB::bind_method(D_METHOD("get_sha256", "path"), &_File::get_sha256);
 	ClassDB::bind_method(D_METHOD("get_endian_swap"), &_File::get_endian_swap);
@@ -2603,6 +2712,10 @@ Error _Semaphore::wait() {
 	return OK; // Can't fail anymore; keep compat
 }
 
+Error _Semaphore::try_wait() {
+	return semaphore.try_wait() ? OK : ERR_BUSY;
+}
+
 Error _Semaphore::post() {
 	semaphore.post();
 	return OK; // Can't fail anymore; keep compat
@@ -2611,6 +2724,7 @@ Error _Semaphore::post() {
 void _Semaphore::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("wait"), &_Semaphore::wait);
 	ClassDB::bind_method(D_METHOD("post"), &_Semaphore::post);
+	ClassDB::bind_method(D_METHOD("try_wait"), &_Semaphore::try_wait);
 }
 
 ///////////////
@@ -2663,12 +2777,18 @@ void _Thread::_start_func(void *ud) {
 		// We must check if we are in case b).
 		int target_param_count = 0;
 		int target_default_arg_count = 0;
+
 		Ref<Script> script = target_instance->get_script();
-		if (script.is_valid()) {
-			MethodInfo mi = script->get_method_info(t->target_method);
-			target_param_count = mi.arguments.size();
-			target_default_arg_count = mi.default_arguments.size();
-		} else {
+		while (script.is_valid()) {
+			if (script->has_method(t->target_method)) {
+				MethodInfo mi = script->get_method_info(t->target_method);
+				target_param_count = mi.arguments.size();
+				target_default_arg_count = mi.default_arguments.size();
+				break;
+			}
+			script = script->get_base_script();
+		}
+		if (script.is_null()) {
 			MethodBind *method = ClassDB::get_method(target_instance->get_class_name(), t->target_method);
 			if (method) {
 				target_param_count = method->get_argument_count();

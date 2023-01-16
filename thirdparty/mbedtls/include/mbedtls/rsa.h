@@ -88,7 +88,7 @@
 
 /*
  * The above constants may be used even if the RSA module is compile out,
- * eg for alternative (PKCS#11) RSA implemenations in the PK layers.
+ * eg for alternative (PKCS#11) RSA implementations in the PK layers.
  */
 
 #ifdef __cplusplus
@@ -491,7 +491,7 @@ int mbedtls_rsa_check_pubkey( const mbedtls_rsa_context *ctx );
  *             the current function does not have access to them,
  *             and therefore cannot check them. See mbedtls_rsa_complete().
  *             If you want to check the consistency of the entire
- *             content of an PKCS1-encoded RSA private key, for example, you
+ *             content of a PKCS1-encoded RSA private key, for example, you
  *             should use mbedtls_rsa_validate_params() before setting
  *             up the RSA context.
  *             Additionally, if the implementation performs empirical checks,
@@ -552,7 +552,7 @@ int mbedtls_rsa_public( mbedtls_rsa_context *ctx,
  *
  * \note           Blinding is used if and only if a PRNG is provided.
  *
- * \note           If blinding is used, both the base of exponentation
+ * \note           If blinding is used, both the base of exponentiation
  *                 and the exponent are blinded, providing protection
  *                 against some side-channel attacks.
  *
@@ -687,7 +687,7 @@ int mbedtls_rsa_rsaes_pkcs1_v15_encrypt( mbedtls_rsa_context *ctx,
  *                   mode being set to #MBEDTLS_RSA_PRIVATE and might instead
  *                   return #MBEDTLS_ERR_PLATFORM_FEATURE_UNSUPPORTED.
  *
- * \param ctx        The initnialized RSA context to use.
+ * \param ctx        The initialized RSA context to use.
  * \param f_rng      The RNG function to use. This is needed for padding
  *                   generation and must be provided.
  * \param p_rng      The RNG context to be passed to \p f_rng. This may

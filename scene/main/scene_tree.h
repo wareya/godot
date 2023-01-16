@@ -1,35 +1,35 @@
-/*************************************************************************/
-/*  scene_tree.h                                                         */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  scene_tree.h                                                          */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
-#ifndef SCENE_MAIN_LOOP_H
-#define SCENE_MAIN_LOOP_H
+#ifndef SCENE_TREE_H
+#define SCENE_TREE_H
 
 #include "core/io/multiplayer_api.h"
 #include "core/os/main_loop.h"
@@ -41,6 +41,9 @@
 
 class PackedScene;
 class Node;
+class SceneTreeTween;
+class ShortCut;
+class Spatial;
 class Viewport;
 class Material;
 class Mesh;
@@ -102,6 +105,11 @@ private:
 		Group() { changed = false; };
 	};
 
+	struct ClientPhysicsInterpolation {
+		SelfList<Spatial>::List _spatials_list;
+		void physics_process();
+	} _client_physics_interpolation;
+
 	Viewport *root;
 
 	uint64_t tree_version;
@@ -121,6 +129,7 @@ private:
 	bool _quit;
 	bool initialized;
 	bool input_handled;
+	bool _physics_interpolation_enabled;
 
 	Size2 last_screen_size;
 	StringName tree_changed_name;
@@ -155,7 +164,11 @@ private:
 	void _update_font_oversampling(float p_ratio);
 	void _update_root_rect();
 
-	List<ObjectID> delete_queue;
+	struct DeleteQueueElement {
+		ObjectID id;
+		int32_t child_list_id;
+	};
+	LocalVector<DeleteQueueElement> delete_queue;
 
 	Map<UGCall, Vector<Variant>> unique_group_calls;
 	bool ugc_locked;
@@ -181,6 +194,7 @@ private:
 	//void _call_group(uint32_t p_call_flags,const StringName& p_group,const StringName& p_function,const Variant& p_arg1,const Variant& p_arg2);
 
 	List<Ref<SceneTreeTimer>> timers;
+	List<Ref<SceneTreeTween>> tweens;
 
 	///network///
 
@@ -201,6 +215,7 @@ private:
 	void node_added(Node *p_node);
 	void node_removed(Node *p_node);
 	void node_renamed(Node *p_node);
+	void process_tweens(float p_delta, bool p_physics_frame);
 
 	Group *add_to_group(const StringName &p_group, Node *p_node);
 	void remove_from_group(const StringName &p_group, Node *p_node);
@@ -220,6 +235,9 @@ private:
 	SelfList<Node>::List xform_change_list;
 
 	friend class ScriptDebuggerRemote;
+
+	Ref<ShortCut> debugger_stop_shortcut;
+
 #ifdef DEBUG_ENABLED
 
 	Map<int, NodePath> live_edit_node_path_cache;
@@ -296,11 +314,14 @@ public:
 	virtual void init();
 
 	virtual bool iteration(float p_time);
+	virtual void iteration_end();
 	virtual bool idle(float p_time);
 
 	virtual void finish();
 
+	bool is_auto_accept_quit() const;
 	void set_auto_accept_quit(bool p_enable);
+	bool is_quit_on_go_back() const;
 	void set_quit_on_go_back(bool p_enable);
 
 	void quit(int p_exit_code = -1);
@@ -380,6 +401,8 @@ public:
 	Error reload_current_scene();
 
 	Ref<SceneTreeTimer> create_timer(float p_delay_sec, bool p_process_pause = true);
+	Ref<SceneTreeTween> create_tween();
+	Array get_processed_tweens();
 
 	//used by Main::start, don't use otherwise
 	void add_current_scene(Node *p_current);
@@ -407,6 +430,12 @@ public:
 	void set_refuse_new_network_connections(bool p_refuse);
 	bool is_refusing_new_network_connections() const;
 
+	void set_physics_interpolation_enabled(bool p_enabled);
+	bool is_physics_interpolation_enabled() const;
+
+	void client_physics_interpolation_add_spatial(SelfList<Spatial> *p_elem);
+	void client_physics_interpolation_remove_spatial(SelfList<Spatial> *p_elem);
+
 	static void add_idle_callback(IdleCallback p_callback);
 	SceneTree();
 	~SceneTree();
@@ -416,4 +445,4 @@ VARIANT_ENUM_CAST(SceneTree::StretchMode);
 VARIANT_ENUM_CAST(SceneTree::StretchAspect);
 VARIANT_ENUM_CAST(SceneTree::GroupCallFlags);
 
-#endif
+#endif // SCENE_TREE_H

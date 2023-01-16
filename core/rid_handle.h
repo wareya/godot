@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  rid_handle.h                                                         */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  rid_handle.h                                                          */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #ifndef RID_HANDLE_H
 #define RID_HANDLE_H
@@ -142,7 +142,7 @@ class RID_Database {
 	// is treated as a POD type.
 	TrackedPooledList<PoolElement, uint32_t, true, true> _pool;
 	bool _shutdown = false;
-	Mutex _mutex;
+	mutable Mutex _mutex;
 
 	// This is purely for printing the leaks at the end, as RID_Owners may be
 	// destroyed before the RID_Database is shutdown, so the RID_Data may be invalid
@@ -153,7 +153,7 @@ class RID_Database {
 	LocalVector<Leak> _leaks;
 
 	void register_leak(uint32_t p_line_number, uint32_t p_owner_name_id, const char *p_filename);
-	String _rid_to_string(const RID &p_rid, const PoolElement &p_pe);
+	String _rid_to_string(const RID &p_rid, const PoolElement &p_pe) const;
 
 public:
 	RID_Database();
@@ -169,10 +169,11 @@ public:
 	RID prime(const RID &p_rid, int p_line_number, const char *p_filename);
 
 	void handle_make_rid(RID &r_rid, RID_Data *p_data, RID_OwnerBase *p_owner);
-	RID_Data *handle_get(const RID &p_rid);
-	RID_Data *handle_getptr(const RID &p_rid);
-	RID_Data *handle_get_or_null(const RID &p_rid);
-	bool handle_owns(const RID &p_rid) const;
+	RID_Data *handle_get(const RID &p_rid) const;
+	RID_Data *handle_getptr(const RID &p_rid) const;
+	RID_Data *handle_get_or_null(const RID &p_rid) const;
+
+	bool handle_is_owner(const RID &p_rid, const RID_OwnerBase *p_owner) const;
 	void handle_free(const RID &p_rid);
 };
 
@@ -181,15 +182,7 @@ extern RID_Database g_rid_database;
 class RID_OwnerBase {
 protected:
 	bool _is_owner(const RID &p_rid) const {
-		const RID_Data *p = g_rid_database.handle_get_or_null(p_rid);
-		return (p && (p->_owner == this));
-	}
-
-	void _remove_owner(RID &p_rid) {
-		RID_Data *p = g_rid_database.handle_get_or_null(p_rid);
-		if (p) {
-			p->_owner = nullptr;
-		}
+		return g_rid_database.handle_is_owner(p_rid, this);
 	}
 
 	void _rid_print(const char *pszType, String sz, const RID &p_rid);
@@ -238,7 +231,6 @@ public:
 #ifdef RID_HANDLE_PRINT_LIFETIMES
 		_rid_print(_typename, "free_rid", p_rid);
 #endif
-		_remove_owner(p_rid);
 		g_rid_database.handle_free(p_rid);
 	}
 

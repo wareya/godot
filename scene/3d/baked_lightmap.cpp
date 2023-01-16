@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  baked_lightmap.cpp                                                   */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  baked_lightmap.cpp                                                    */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "baked_lightmap.h"
 #include "core/io/config_file.h"
@@ -389,7 +389,7 @@ void BakedLightmap::_find_meshes_and_lights(Node *p_at_node, Vector<MeshesFound>
 
 			GeometryInstance *gi = Object::cast_to<GeometryInstance>(p_at_node);
 			if (gi) {
-				all_override = mi->get_material_override();
+				all_override = gi->get_material_override();
 			}
 
 			for (int i = 0; i < bmeshes.size(); i += 2) {
@@ -414,8 +414,8 @@ void BakedLightmap::_find_meshes_and_lights(Node *p_at_node, Vector<MeshesFound>
 				mf.mesh = mesh;
 
 				if (gi) {
-					mf.cast_shadows = mi->get_cast_shadows_setting() != GeometryInstance::SHADOW_CASTING_SETTING_OFF;
-					mf.generate_lightmap = mi->get_generate_lightmap();
+					mf.cast_shadows = gi->get_cast_shadows_setting() != GeometryInstance::SHADOW_CASTING_SETTING_OFF;
+					mf.generate_lightmap = gi->get_generate_lightmap();
 				} else {
 					mf.cast_shadows = true;
 					mf.generate_lightmap = true;
@@ -616,14 +616,18 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 	if (bake_step_function) {
 		bool cancelled = bake_step_function(0.0, TTR("Finding meshes and lights"), nullptr, true);
 		if (cancelled) {
-			bake_end_function(time_started);
+			if (bake_end_function) {
+				bake_end_function(time_started);
+			}
 			return BAKE_ERROR_USER_ABORTED;
 		}
 	}
 
 	Ref<Lightmapper> lightmapper = Lightmapper::create();
 	if (lightmapper.is_null()) {
-		bake_end_function(time_started);
+		if (bake_end_function) {
+			bake_end_function(time_started);
+		}
 		return BAKE_ERROR_NO_LIGHTMAPPER;
 	}
 
@@ -633,7 +637,9 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 	_find_meshes_and_lights(p_from_node ? p_from_node : get_parent(), meshes_found, lights_found);
 
 	if (meshes_found.size() == 0) {
-		bake_end_function(time_started);
+		if (bake_end_function) {
+			bake_end_function(time_started);
+		}
 		return BAKE_ERROR_NO_MESHES;
 	}
 
@@ -642,7 +648,9 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 			float p = (float)(m_i) / meshes_found.size();
 			bool cancelled = bake_step_function(p * 0.05, vformat(TTR("Preparing geometry (%d/%d)"), m_i + 1, meshes_found.size()), nullptr, false);
 			if (cancelled) {
-				bake_end_function(time_started);
+				if (bake_end_function) {
+					bake_end_function(time_started);
+				}
 				return BAKE_ERROR_USER_ABORTED;
 			}
 		}
@@ -792,6 +800,20 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 					if (env.is_valid()) {
 						environment_image = _get_irradiance_map(env, Vector2i(128, 64));
 						environment_xform = get_global_transform().affine_inverse().basis * env->get_sky_orientation();
+
+						float ambient_sky = env->get_ambient_light_sky_contribution();
+						float energy = env->get_ambient_light_energy();
+						if (ambient_sky != 1.0 || energy != 1.0) {
+							Color ambient_light = env->get_ambient_light_color().to_linear() * (1.0 - ambient_sky) * energy;
+							environment_image->lock();
+							for (int i = 0; i < 128; i++) {
+								for (int j = 0; j < 64; j++) {
+									Color c = ambient_light + environment_image->get_pixel(i, j) * ambient_sky * energy;
+									environment_image->set_pixel(i, j, c);
+								}
+							}
+							environment_image->unlock();
+						}
 					}
 				}
 			} break;
@@ -831,7 +853,9 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 	Lightmapper::BakeError bake_err = lightmapper->bake(Lightmapper::BakeQuality(bake_quality), use_denoiser, bounces, bounce_indirect_energy, bias, gen_atlas, max_atlas_size, environment_image, environment_xform, _lightmap_bake_step_function, &bsud, bake_substep_function);
 
 	if (bake_err != Lightmapper::BAKE_OK) {
-		bake_end_function(time_started);
+		if (bake_end_function) {
+			bake_end_function(time_started);
+		}
 		switch (bake_err) {
 			case Lightmapper::BAKE_ERROR_USER_ABORTED: {
 				return BAKE_ERROR_USER_ABORTED;
@@ -861,7 +885,9 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 		if (bake_step_function) {
 			bool cancelled = bake_step_function(0.85, TTR("Generating capture"), nullptr, true);
 			if (cancelled) {
-				bake_end_function(time_started);
+				if (bake_end_function) {
+					bake_end_function(time_started);
+				}
 				return BAKE_ERROR_USER_ABORTED;
 			}
 		}
@@ -941,7 +967,9 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 	if (bake_step_function) {
 		bool cancelled = bake_step_function(0.9, TTR("Saving lightmaps"), nullptr, true);
 		if (cancelled) {
-			bake_end_function(time_started);
+			if (bake_end_function) {
+				bake_end_function(time_started);
+			}
 			return BAKE_ERROR_USER_ABORTED;
 		}
 	}
@@ -954,23 +982,35 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 	bool use_srgb = use_color && !use_hdr;
 
 	if (gen_atlas) {
-		Ref<Image> large_image;
-		large_image.instance();
-		large_image->create(images[0]->get_width(), images[0]->get_height() * images.size(), false, images[0]->get_format());
-		for (int i = 0; i < images.size(); i++) {
-			large_image->blit_rect(images[i], Rect2(0, 0, images[0]->get_width(), images[0]->get_height()), Point2(0, images[0]->get_height() * i));
-		}
+		int slice_count = images.size();
+		int slice_width = images[0]->get_width();
+		int slice_height = images[0]->get_height();
 
-		Ref<TextureLayered> texture;
+		int slices_per_texture = Image::MAX_HEIGHT / slice_height;
+		int texture_count = Math::ceil(slice_count / (float)slices_per_texture);
+
+		Vector<Ref<TextureLayered>> textures;
+		textures.resize(texture_count);
 		String base_path = p_data_save_path.get_basename();
 
-		if (ResourceLoader::import) {
-			_save_image(base_path, large_image, use_srgb);
+		int last_count = slice_count % slices_per_texture;
+		for (int i = 0; i < texture_count; i++) {
+			String texture_path = texture_count > 1 ? base_path + "_" + itos(i) : base_path;
+			int texture_slice_count = (i == texture_count - 1 && last_count != 0) ? last_count : slices_per_texture;
+
+			Ref<Image> large_image;
+			large_image.instance();
+			large_image->create(slice_width, slice_height * texture_slice_count, false, images[0]->get_format());
+
+			for (int j = 0; j < texture_slice_count; j++) {
+				large_image->blit_rect(images[i * slices_per_texture + j], Rect2(0, 0, slice_width, slice_height), Point2(0, slice_height * j));
+			}
+			_save_image(texture_path, large_image, use_srgb);
 
 			Ref<ConfigFile> config;
 			config.instance();
-			if (FileAccess::exists(base_path + ".import")) {
-				config->load(base_path + ".import");
+			if (FileAccess::exists(texture_path + ".import")) {
+				config->load(texture_path + ".import");
 			} else {
 				// Set only if settings don't exist, to keep user choice
 				config->set_value("params", "compress/mode", 0);
@@ -983,49 +1023,28 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 			config->set_value("params", "flags/mipmaps", false);
 			config->set_value("params", "flags/srgb", use_srgb);
 			config->set_value("params", "slices/horizontal", 1);
-			config->set_value("params", "slices/vertical", images.size());
-			config->save(base_path + ".import");
+			config->set_value("params", "slices/vertical", texture_slice_count);
 
-			ResourceLoader::import(base_path);
-			texture = ResourceLoader::load(base_path); //if already loaded, it will be updated on refocus?
-		} else {
-			base_path += ".texarr";
-			Ref<TextureLayered> tex;
-			bool set_path = true;
-			if (ResourceCache::has(base_path)) {
-				tex = Ref<Resource>((Resource *)ResourceCache::get(base_path));
-				set_path = false;
-			}
+			config->save(texture_path + ".import");
 
-			if (!tex.is_valid()) {
-				tex.instance();
-			}
-
-			tex->create(images[0]->get_width(), images[0]->get_height(), images.size(), images[0]->get_format(), Texture::FLAGS_DEFAULT);
-			for (int i = 0; i < images.size(); i++) {
-				tex->set_layer_data(images[i], i);
-			}
-
-			ResourceSaver::save(base_path, tex, ResourceSaver::FLAG_CHANGE_PATH);
-			if (set_path) {
-				tex->set_path(base_path);
-			}
-			texture = tex;
+			ResourceLoader::import(texture_path);
+			textures.write[i] = ResourceLoader::load(texture_path); //if already loaded, it will be updated on refocus?
 		}
 
 		for (int i = 0; i < lightmapper->get_bake_mesh_count(); i++) {
-			if (meshes_found[i].generate_lightmap) {
-				Dictionary d = lightmapper->get_bake_mesh_userdata(i);
-				NodePath np = d["path"];
-				int32_t subindex = -1;
-				if (d.has("subindex")) {
-					subindex = d["subindex"];
-				}
-
-				Rect2 uv_rect = lightmapper->get_bake_mesh_uv_scale(i);
-				int slice_index = lightmapper->get_bake_mesh_texture_slice(i);
-				data->add_user(np, texture, slice_index, uv_rect, subindex);
+			if (!meshes_found[i].generate_lightmap) {
+				continue;
 			}
+			Dictionary d = lightmapper->get_bake_mesh_userdata(i);
+			NodePath np = d["path"];
+			int32_t subindex = -1;
+			if (d.has("subindex")) {
+				subindex = d["subindex"];
+			}
+
+			Rect2 uv_rect = lightmapper->get_bake_mesh_uv_scale(i);
+			int slice_index = lightmapper->get_bake_mesh_texture_slice(i);
+			data->add_user(np, textures[slice_index / slices_per_texture], slice_index % slices_per_texture, uv_rect, subindex);
 		}
 	} else {
 		for (int i = 0; i < lightmapper->get_bake_mesh_count(); i++) {
@@ -1097,7 +1116,9 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 	if (bake_step_function) {
 		bool cancelled = bake_step_function(1.0, TTR("Done"), nullptr, true);
 		if (cancelled) {
-			bake_end_function(time_started);
+			if (bake_end_function) {
+				bake_end_function(time_started);
+			}
 			return BAKE_ERROR_USER_ABORTED;
 		}
 	}
@@ -1106,12 +1127,16 @@ BakedLightmap::BakeError BakedLightmap::bake(Node *p_from_node, String p_data_sa
 	data->set_path(p_data_save_path);
 
 	if (err != OK) {
-		bake_end_function(time_started);
+		if (bake_end_function) {
+			bake_end_function(time_started);
+		}
 		return BAKE_ERROR_CANT_CREATE_IMAGE;
 	}
 
 	set_light_data(data);
-	bake_end_function(time_started);
+	if (bake_end_function) {
+		bake_end_function(time_started);
+	}
 
 	return BAKE_ERROR_OK;
 }

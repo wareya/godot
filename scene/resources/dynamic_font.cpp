@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  dynamic_font.cpp                                                     */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  dynamic_font.cpp                                                      */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "modules/modules_enabled.gen.h" // For freetype.
 #ifdef MODULE_FREETYPE_ENABLED
@@ -114,7 +114,7 @@ void DynamicFontData::_bind_methods() {
 	BIND_ENUM_CONSTANT(HINTING_NORMAL);
 
 	// Only WOFF1 is supported as WOFF2 requires a Brotli decompression library to be linked.
-	ADD_PROPERTY(PropertyInfo(Variant::STRING, "font_path", PROPERTY_HINT_FILE, "*.ttf,*.otf,*.woff"), "set_font_path", "get_font_path");
+	ADD_PROPERTY(PropertyInfo(Variant::STRING, "font_path", PROPERTY_HINT_FILE, "*.ttf,*.otf,*.woff,*.woff2"), "set_font_path", "get_font_path");
 }
 
 DynamicFontData::DynamicFontData() {
@@ -328,10 +328,174 @@ void DynamicFontAtSize::set_texture_flags(uint32_t p_flags) {
 	texture_flags = p_flags;
 	for (int i = 0; i < textures.size(); i++) {
 		Ref<ImageTexture> &tex = textures.write[i].texture;
+		textures.write[i].dirty = true;
 		if (!tex.is_null()) {
 			tex->set_flags(p_flags);
 		}
 	}
+}
+
+RID DynamicFontAtSize::get_char_texture(CharType p_char, CharType p_next, const Vector<Ref<DynamicFontAtSize>> &p_fallbacks) const {
+	if (!valid) {
+		return RID();
+	}
+
+	int32_t c = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		c = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return RID();
+	}
+
+	const_cast<DynamicFontAtSize *>(this)->_update_char(c);
+
+	Pair<const Character *, DynamicFontAtSize *> char_pair_with_font = _find_char_with_font(c, p_fallbacks);
+	const Character *ch = char_pair_with_font.first;
+	DynamicFontAtSize *font = char_pair_with_font.second;
+
+	ERR_FAIL_COND_V(!ch, RID());
+	if (ch->found) {
+		ERR_FAIL_COND_V(ch->texture_idx < -1 || ch->texture_idx >= font->textures.size(), RID());
+
+		if (ch->texture_idx != -1) {
+			if (font->textures[ch->texture_idx].dirty) {
+				ShelfPackTexture &tex = font->textures.write[ch->texture_idx];
+				Ref<Image> img = memnew(Image(tex.texture_size, tex.texture_size, 0, tex.format, tex.imgdata));
+				if (tex.texture.is_null()) {
+					tex.texture.instance();
+					tex.texture->create_from_image(img, Texture::FLAG_VIDEO_SURFACE | texture_flags);
+				} else {
+					tex.texture->set_data(img); //update
+				}
+				tex.dirty = false;
+			}
+			return font->textures[ch->texture_idx].texture->get_rid();
+		}
+	}
+	return RID();
+}
+
+Size2 DynamicFontAtSize::get_char_texture_size(CharType p_char, CharType p_next, const Vector<Ref<DynamicFontAtSize>> &p_fallbacks) const {
+	if (!valid) {
+		return Size2();
+	}
+
+	int32_t c = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		c = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Size2();
+	}
+
+	const_cast<DynamicFontAtSize *>(this)->_update_char(c);
+
+	Pair<const Character *, DynamicFontAtSize *> char_pair_with_font = _find_char_with_font(c, p_fallbacks);
+	const Character *ch = char_pair_with_font.first;
+	DynamicFontAtSize *font = char_pair_with_font.second;
+
+	ERR_FAIL_COND_V(!ch, Size2());
+	if (ch->found) {
+		ERR_FAIL_COND_V(ch->texture_idx < -1 || ch->texture_idx >= font->textures.size(), Size2());
+
+		if (ch->texture_idx != -1) {
+			if (font->textures[ch->texture_idx].dirty) {
+				ShelfPackTexture &tex = font->textures.write[ch->texture_idx];
+				Ref<Image> img = memnew(Image(tex.texture_size, tex.texture_size, 0, tex.format, tex.imgdata));
+				if (tex.texture.is_null()) {
+					tex.texture.instance();
+					tex.texture->create_from_image(img, Texture::FLAG_VIDEO_SURFACE | texture_flags);
+				} else {
+					tex.texture->set_data(img); //update
+				}
+				tex.dirty = false;
+			}
+			return font->textures[ch->texture_idx].texture->get_size();
+		}
+	}
+	return Size2();
+}
+
+Vector2 DynamicFontAtSize::get_char_tx_offset(CharType p_char, CharType p_next, const Vector<Ref<DynamicFontAtSize>> &p_fallbacks) const {
+	if (!valid) {
+		return Vector2();
+	}
+
+	int32_t c = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		c = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Vector2();
+	}
+
+	const_cast<DynamicFontAtSize *>(this)->_update_char(c);
+
+	Pair<const Character *, DynamicFontAtSize *> char_pair_with_font = _find_char_with_font(c, p_fallbacks);
+	const Character *ch = char_pair_with_font.first;
+	DynamicFontAtSize *font = char_pair_with_font.second;
+
+	ERR_FAIL_COND_V(!ch, Vector2());
+	if (ch->found) {
+		Point2 cpos;
+		cpos.x += ch->h_align;
+		cpos.y -= font->get_ascent();
+		cpos.y += ch->v_align;
+
+		return cpos;
+	}
+	return Vector2();
+}
+
+Size2 DynamicFontAtSize::get_char_tx_size(CharType p_char, CharType p_next, const Vector<Ref<DynamicFontAtSize>> &p_fallbacks) const {
+	if (!valid) {
+		return Size2();
+	}
+
+	int32_t c = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		c = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Size2();
+	}
+
+	const_cast<DynamicFontAtSize *>(this)->_update_char(c);
+
+	Pair<const Character *, DynamicFontAtSize *> char_pair_with_font = _find_char_with_font(c, p_fallbacks);
+	const Character *ch = char_pair_with_font.first;
+
+	ERR_FAIL_COND_V(!ch, Size2());
+	if (ch->found) {
+		return ch->rect.size;
+	}
+	return Size2();
+}
+
+Rect2 DynamicFontAtSize::get_char_tx_uv_rect(CharType p_char, CharType p_next, const Vector<Ref<DynamicFontAtSize>> &p_fallbacks) const {
+	if (!valid) {
+		return Rect2();
+	}
+
+	int32_t c = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		c = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Rect2();
+	}
+
+	const_cast<DynamicFontAtSize *>(this)->_update_char(c);
+
+	Pair<const Character *, DynamicFontAtSize *> char_pair_with_font = _find_char_with_font(c, p_fallbacks);
+	const Character *ch = char_pair_with_font.first;
+
+	ERR_FAIL_COND_V(!ch, Rect2());
+	if (ch->found) {
+		return ch->rect_uv;
+	}
+	return Rect2();
 }
 
 float DynamicFontAtSize::draw_char(RID p_canvas_item, const Point2 &p_pos, CharType p_char, CharType p_next, const Color &p_modulate, const Vector<Ref<DynamicFontAtSize>> &p_fallbacks, bool p_advance_only, bool p_outline) const {
@@ -377,12 +541,23 @@ float DynamicFontAtSize::draw_char(RID p_canvas_item, const Point2 &p_pos, CharT
 		ERR_FAIL_COND_V(ch->texture_idx < -1 || ch->texture_idx >= font->textures.size(), 0);
 
 		if (!p_advance_only && ch->texture_idx != -1) {
+			if (font->textures[ch->texture_idx].dirty) {
+				ShelfPackTexture &tex = font->textures.write[ch->texture_idx];
+				Ref<Image> img = memnew(Image(tex.texture_size, tex.texture_size, 0, tex.format, tex.imgdata));
+				if (tex.texture.is_null()) {
+					tex.texture.instance();
+					tex.texture->create_from_image(img, Texture::FLAG_VIDEO_SURFACE | texture_flags);
+				} else {
+					tex.texture->set_data(img); //update
+				}
+				tex.dirty = false;
+			}
 			Point2 cpos = p_pos;
 			cpos.x += ch->h_align;
 			cpos.y -= font->get_ascent();
 			cpos.y += ch->v_align;
 			Color modulate = p_modulate;
-			if (FT_HAS_COLOR(font->face)) {
+			if (font->textures[ch->texture_idx].texture->get_format() == Image::FORMAT_RGBA8) {
 				modulate.r = modulate.g = modulate.b = 1.0;
 			}
 			RID texture = font->textures[ch->texture_idx].texture->get_rid();
@@ -399,6 +574,51 @@ float DynamicFontAtSize::draw_char(RID p_canvas_item, const Point2 &p_pos, CharT
 	return advance;
 }
 
+Dictionary DynamicFontAtSize::get_char_contours(CharType p_char, CharType p_next, const Vector<Ref<DynamicFontAtSize>> &p_fallbacks) const {
+	if (!valid) {
+		return Dictionary();
+	}
+
+	int32_t c = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		c = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Dictionary();
+	}
+
+	const_cast<DynamicFontAtSize *>(this)->_update_char(c);
+
+	Pair<const Character *, DynamicFontAtSize *> char_pair_with_font = _find_char_with_font(c, p_fallbacks);
+	const Character *ch = char_pair_with_font.first;
+	DynamicFontAtSize *font = char_pair_with_font.second;
+
+	if (ch->found) {
+		PoolVector3Array points;
+		PoolIntArray contours;
+
+		int error = FT_Load_Char(font->face, c, FT_LOAD_NO_BITMAP | (font->font->force_autohinter ? FT_LOAD_FORCE_AUTOHINT : 0));
+		ERR_FAIL_COND_V(error, Dictionary());
+
+		double scale = (1.0 / 64.0) / oversampling * scale_color_font;
+		for (short i = 0; i < font->face->glyph->outline.n_points; i++) {
+			points.push_back(Vector3(font->face->glyph->outline.points[i].x * scale, -font->face->glyph->outline.points[i].y * scale, FT_CURVE_TAG(font->face->glyph->outline.tags[i])));
+		}
+		for (short i = 0; i < font->face->glyph->outline.n_contours; i++) {
+			contours.push_back(font->face->glyph->outline.contours[i]);
+		}
+		bool orientation = (FT_Outline_Get_Orientation(&font->face->glyph->outline) == FT_ORIENTATION_FILL_RIGHT);
+
+		Dictionary out;
+		out["points"] = points;
+		out["contours"] = contours;
+		out["orientation"] = orientation;
+		return out;
+	} else {
+		return Dictionary();
+	}
+}
+
 DynamicFontAtSize::Character DynamicFontAtSize::Character::not_found() {
 	Character ch;
 	ch.texture_idx = -1;
@@ -409,57 +629,29 @@ DynamicFontAtSize::Character DynamicFontAtSize::Character::not_found() {
 	return ch;
 }
 
-DynamicFontAtSize::TexturePosition DynamicFontAtSize::_find_texture_pos_for_glyph(int p_color_size, Image::Format p_image_format, int p_width, int p_height) {
-	TexturePosition ret;
-	ret.index = -1;
-	ret.x = 0;
-	ret.y = 0;
+DynamicFontAtSize::FontTexturePosition DynamicFontAtSize::_find_texture_pos_for_glyph(int p_color_size, Image::Format p_image_format, int p_width, int p_height) {
+	FontTexturePosition ret;
 
 	int mw = p_width;
 	int mh = p_height;
 
-	for (int i = 0; i < textures.size(); i++) {
-		const CharTexture &ct = textures[i];
-
-		if (ct.texture->get_format() != p_image_format) {
+	ShelfPackTexture *ct = textures.ptrw();
+	for (int32_t i = 0; i < textures.size(); i++) {
+		if (ct[i].format != p_image_format) {
+			continue;
+		}
+		if (mw > ct[i].texture_size || mh > ct[i].texture_size) { // Too big for this texture.
 			continue;
 		}
 
-		if (mw > ct.texture_size || mh > ct.texture_size) { //too big for this texture
-			continue;
+		ret = ct[i].pack_rect(i, mh, mw);
+		if (ret.index != -1) {
+			break;
 		}
-
-		ret.y = 0x7FFFFFFF;
-		ret.x = 0;
-
-		for (int j = 0; j < ct.texture_size - mw; j++) {
-			int max_y = 0;
-
-			for (int k = j; k < j + mw; k++) {
-				int y = ct.offsets[k];
-				if (y > max_y) {
-					max_y = y;
-				}
-			}
-
-			if (max_y < ret.y) {
-				ret.y = max_y;
-				ret.x = j;
-			}
-		}
-
-		if (ret.y == 0x7FFFFFFF || ret.y + mh > ct.texture_size) {
-			continue; //fail, could not fit it here
-		}
-
-		ret.index = i;
-		break;
 	}
 
 	if (ret.index == -1) {
 		//could not find texture to fit, create one
-		ret.x = 0;
-		ret.y = 0;
 
 		int texsize = MAX(id.size * oversampling * 8, 256);
 		if (mw > texsize) {
@@ -473,8 +665,8 @@ DynamicFontAtSize::TexturePosition DynamicFontAtSize::_find_texture_pos_for_glyp
 
 		texsize = MIN(texsize, 4096);
 
-		CharTexture tex;
-		tex.texture_size = texsize;
+		ShelfPackTexture tex = ShelfPackTexture(texsize);
+		tex.format = p_image_format;
 		tex.imgdata.resize(texsize * texsize * p_color_size); //grayscale alpha
 
 		{
@@ -498,13 +690,9 @@ DynamicFontAtSize::TexturePosition DynamicFontAtSize::_find_texture_pos_for_glyp
 				}
 			}
 		}
-		tex.offsets.resize(texsize);
-		for (int i = 0; i < texsize; i++) { //zero offsets
-			tex.offsets.write[i] = 0;
-		}
-
 		textures.push_back(tex);
-		ret.index = textures.size() - 1;
+		int32_t idx = textures.size() - 1;
+		ret = textures.write[idx].pack_rect(idx, mh, mw);
 	}
 
 	return ret;
@@ -523,13 +711,13 @@ DynamicFontAtSize::Character DynamicFontAtSize::_bitmap_to_character(FT_Bitmap b
 	int color_size = bitmap.pixel_mode == FT_PIXEL_MODE_BGRA ? 4 : 2;
 	Image::Format require_format = color_size == 4 ? Image::FORMAT_RGBA8 : Image::FORMAT_LA8;
 
-	TexturePosition tex_pos = _find_texture_pos_for_glyph(color_size, require_format, mw, mh);
+	FontTexturePosition tex_pos = _find_texture_pos_for_glyph(color_size, require_format, mw, mh);
 	ERR_FAIL_COND_V(tex_pos.index < 0, Character::not_found());
 
 	//fit character in char texture
 
-	CharTexture &tex = textures.write[tex_pos.index];
-
+	ShelfPackTexture &tex = textures.write[tex_pos.index];
+	tex.dirty = true;
 	{
 		PoolVector<uint8_t>::Write wr = tex.imgdata.write();
 
@@ -562,24 +750,6 @@ DynamicFontAtSize::Character DynamicFontAtSize::_bitmap_to_character(FT_Bitmap b
 				}
 			}
 		}
-	}
-
-	//blit to image and texture
-	{
-		Ref<Image> img = memnew(Image(tex.texture_size, tex.texture_size, 0, require_format, tex.imgdata));
-
-		if (tex.texture.is_null()) {
-			tex.texture.instance();
-			tex.texture->create_from_image(img, Texture::FLAG_VIDEO_SURFACE | texture_flags);
-		} else {
-			tex.texture->set_data(img); //update
-		}
-	}
-
-	// update height array
-
-	for (int k = tex_pos.x; k < tex_pos.x + mw; k++) {
-		tex.offsets.write[k] = tex_pos.y + mh;
 	}
 
 	Character chr;
@@ -942,6 +1112,81 @@ bool DynamicFont::has_outline() const {
 	return outline_cache_id.outline_size > 0;
 }
 
+RID DynamicFont::get_char_texture(CharType p_char, CharType p_next, bool p_outline) const {
+	if (!data_at_size.is_valid()) {
+		return RID();
+	}
+
+	if (p_outline) {
+		if (outline_data_at_size.is_valid() && outline_cache_id.outline_size > 0) {
+			return outline_data_at_size->get_char_texture(p_char, p_next, fallback_outline_data_at_size);
+		}
+		return RID();
+	} else {
+		return data_at_size->get_char_texture(p_char, p_next, fallback_data_at_size);
+	}
+}
+
+Size2 DynamicFont::get_char_texture_size(CharType p_char, CharType p_next, bool p_outline) const {
+	if (!data_at_size.is_valid()) {
+		return Size2();
+	}
+
+	if (p_outline) {
+		if (outline_data_at_size.is_valid() && outline_cache_id.outline_size > 0) {
+			return outline_data_at_size->get_char_texture_size(p_char, p_next, fallback_outline_data_at_size);
+		}
+		return Size2();
+	} else {
+		return data_at_size->get_char_texture_size(p_char, p_next, fallback_data_at_size);
+	}
+}
+
+Vector2 DynamicFont::get_char_tx_offset(CharType p_char, CharType p_next, bool p_outline) const {
+	if (!data_at_size.is_valid()) {
+		return Vector2();
+	}
+
+	if (p_outline) {
+		if (outline_data_at_size.is_valid() && outline_cache_id.outline_size > 0) {
+			return outline_data_at_size->get_char_tx_offset(p_char, p_next, fallback_outline_data_at_size);
+		}
+		return Vector2();
+	} else {
+		return data_at_size->get_char_tx_offset(p_char, p_next, fallback_data_at_size);
+	}
+}
+
+Size2 DynamicFont::get_char_tx_size(CharType p_char, CharType p_next, bool p_outline) const {
+	if (!data_at_size.is_valid()) {
+		return Size2();
+	}
+
+	if (p_outline) {
+		if (outline_data_at_size.is_valid() && outline_cache_id.outline_size > 0) {
+			return outline_data_at_size->get_char_tx_size(p_char, p_next, fallback_outline_data_at_size);
+		}
+		return Size2();
+	} else {
+		return data_at_size->get_char_tx_size(p_char, p_next, fallback_data_at_size);
+	}
+}
+
+Rect2 DynamicFont::get_char_tx_uv_rect(CharType p_char, CharType p_next, bool p_outline) const {
+	if (!data_at_size.is_valid()) {
+		return Rect2();
+	}
+
+	if (p_outline) {
+		if (outline_data_at_size.is_valid() && outline_cache_id.outline_size > 0) {
+			return outline_data_at_size->get_char_tx_uv_rect(p_char, p_next, fallback_outline_data_at_size);
+		}
+		return Rect2();
+	} else {
+		return data_at_size->get_char_tx_uv_rect(p_char, p_next, fallback_data_at_size);
+	}
+}
+
 float DynamicFont::draw_char(RID p_canvas_item, const Point2 &p_pos, CharType p_char, CharType p_next, const Color &p_modulate, bool p_outline) const {
 	if (!data_at_size.is_valid()) {
 		return 0;
@@ -960,6 +1205,14 @@ float DynamicFont::draw_char(RID p_canvas_item, const Point2 &p_pos, CharType p_
 	} else {
 		return data_at_size->draw_char(p_canvas_item, p_pos, p_char, p_next, p_modulate, fallback_data_at_size, false, false) + spacing; // Draw base glyph and return advance.
 	}
+}
+
+Dictionary DynamicFont::get_char_contours(CharType p_char, CharType p_next) const {
+	if (!data_at_size.is_valid()) {
+		return Dictionary();
+	}
+
+	return data_at_size->get_char_contours(p_char, p_next, fallback_data_at_size);
 }
 
 void DynamicFont::set_fallback(int p_idx, const Ref<DynamicFontData> &p_data) {
@@ -1076,7 +1329,7 @@ void DynamicFont::_bind_methods() {
 
 	ADD_GROUP("Settings", "");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "size", PROPERTY_HINT_RANGE, "1,1024,1"), "set_size", "get_size");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "outline_size", PROPERTY_HINT_RANGE, "0,1024,1"), "set_outline_size", "get_outline_size");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "outline_size", PROPERTY_HINT_RANGE, "0,255,1"), "set_outline_size", "get_outline_size");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "outline_color"), "set_outline_color", "get_outline_color");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_mipmaps"), "set_use_mipmaps", "get_use_mipmaps");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "use_filter"), "set_use_filter", "get_use_filter");
@@ -1166,7 +1419,7 @@ void DynamicFont::update_oversampling() {
 
 /////////////////////////
 
-RES ResourceFormatLoaderDynamicFont::load(const String &p_path, const String &p_original_path, Error *r_error) {
+RES ResourceFormatLoaderDynamicFont::load(const String &p_path, const String &p_original_path, Error *r_error, bool p_no_subresource_cache) {
 	if (r_error) {
 		*r_error = ERR_FILE_CANT_OPEN;
 	}
@@ -1185,8 +1438,8 @@ RES ResourceFormatLoaderDynamicFont::load(const String &p_path, const String &p_
 void ResourceFormatLoaderDynamicFont::get_recognized_extensions(List<String> *p_extensions) const {
 	p_extensions->push_back("ttf");
 	p_extensions->push_back("otf");
-	// Only WOFF1 is supported as WOFF2 requires a Brotli decompression library to be linked.
 	p_extensions->push_back("woff");
+	p_extensions->push_back("woff2");
 }
 
 bool ResourceFormatLoaderDynamicFont::handles_type(const String &p_type) const {
@@ -1195,7 +1448,7 @@ bool ResourceFormatLoaderDynamicFont::handles_type(const String &p_type) const {
 
 String ResourceFormatLoaderDynamicFont::get_resource_type(const String &p_path) const {
 	String el = p_path.get_extension().to_lower();
-	if (el == "ttf" || el == "otf" || el == "woff") {
+	if (el == "ttf" || el == "otf" || el == "woff" || el == "woff2") {
 		return "DynamicFontData";
 	}
 	return "";

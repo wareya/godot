@@ -1,38 +1,39 @@
-/*************************************************************************/
-/*  editor_export.h                                                      */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  editor_export.h                                                       */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #ifndef EDITOR_EXPORT_H
 #define EDITOR_EXPORT_H
 
 #include "core/os/dir_access.h"
 #include "core/resource.h"
+#include "scene/gui/rich_text_label.h"
 #include "scene/main/node.h"
 #include "scene/main/timer.h"
 #include "scene/resources/texture.h"
@@ -74,6 +75,7 @@ private:
 
 	List<PropertyInfo> properties;
 	Map<StringName, Variant> values;
+	Map<StringName, bool> update_visibility;
 
 	String name;
 
@@ -151,6 +153,19 @@ public:
 	typedef Error (*EditorExportSaveFunction)(void *p_userdata, const String &p_path, const Vector<uint8_t> &p_data, int p_file, int p_total);
 	typedef Error (*EditorExportSaveSharedObject)(void *p_userdata, const SharedObject &p_so);
 
+	enum ExportMessageType {
+		EXPORT_MESSAGE_NONE,
+		EXPORT_MESSAGE_INFO,
+		EXPORT_MESSAGE_WARNING,
+		EXPORT_MESSAGE_ERROR,
+	};
+
+	struct ExportMessage {
+		ExportMessageType msg_type;
+		String category;
+		String text;
+	};
+
 private:
 	struct SavedData {
 		uint64_t ofs;
@@ -179,6 +194,8 @@ private:
 		Set<String> features;
 		PoolVector<String> features_pv;
 	};
+
+	Vector<ExportMessage> messages;
 
 	void _export_find_resources(EditorFileSystemDirectory *p_dir, Set<String> &p_paths);
 	void _export_find_dependencies(const String &p_path, Set<String> &p_paths);
@@ -210,19 +227,62 @@ public:
 	struct ExportOption {
 		PropertyInfo option;
 		Variant default_value;
+		bool update_visibility = false;
 
-		ExportOption(const PropertyInfo &p_info, const Variant &p_default) :
+		ExportOption(const PropertyInfo &p_info, const Variant &p_default, bool p_update_visibility = false) :
 				option(p_info),
-				default_value(p_default) {
+				default_value(p_default),
+				update_visibility(p_update_visibility) {
 		}
 		ExportOption() {}
 	};
 
 	virtual Ref<EditorExportPreset> create_preset();
 
+	virtual void clear_messages() { messages.clear(); }
+	virtual void add_message(ExportMessageType p_type, const String &p_category, const String &p_message) {
+		ExportMessage msg;
+		msg.category = p_category;
+		msg.text = p_message;
+		msg.msg_type = p_type;
+		messages.push_back(msg);
+		switch (p_type) {
+			case EXPORT_MESSAGE_INFO: {
+				print_line(vformat("%s: %s", msg.category, msg.text));
+			} break;
+			case EXPORT_MESSAGE_WARNING: {
+				WARN_PRINT(vformat("%s: %s", msg.category, msg.text));
+			} break;
+			case EXPORT_MESSAGE_ERROR: {
+				ERR_PRINT(vformat("%s: %s", msg.category, msg.text));
+			} break;
+			default:
+				break;
+		}
+	}
+
+	virtual int get_message_count() const {
+		return messages.size();
+	}
+
+	virtual ExportMessage get_message(int p_index) const {
+		ERR_FAIL_INDEX_V(p_index, messages.size(), ExportMessage());
+		return messages[p_index];
+	}
+
+	virtual ExportMessageType get_worst_message_type() const {
+		ExportMessageType worst_type = EXPORT_MESSAGE_NONE;
+		for (int i = 0; i < messages.size(); i++) {
+			worst_type = MAX(worst_type, messages[i].msg_type);
+		}
+		return worst_type;
+	}
+
+	virtual bool fill_log_messages(RichTextLabel *p_log, Error p_err);
+
 	virtual void get_export_options(List<ExportOption> *r_options) = 0;
 	virtual bool should_update_export_options() { return false; }
-	virtual bool get_option_visibility(const String &p_option, const Map<StringName, Variant> &p_options) const { return true; }
+	virtual bool get_option_visibility(const EditorExportPreset *p_preset, const String &p_option, const Map<StringName, Variant> &p_options) const { return true; }
 
 	virtual String get_os_name() const = 0;
 	virtual String get_name() const = 0;
@@ -254,7 +314,9 @@ public:
 
 	String test_etc2() const; //generic test for etc2 since most platforms use it
 	String test_etc2_or_pvrtc() const; // test for etc2 or pvrtc support for iOS
-	virtual bool can_export(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const = 0;
+	bool can_export(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const;
+	virtual bool has_valid_export_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const = 0;
+	virtual bool has_valid_project_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error) const = 0;
 
 	virtual List<String> get_binary_extensions(const Ref<EditorExportPreset> &p_preset) const = 0;
 	virtual Error export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags = 0) = 0;
@@ -400,9 +462,6 @@ public:
 class EditorExportPlatformPC : public EditorExportPlatform {
 	GDCLASS(EditorExportPlatformPC, EditorExportPlatform);
 
-public:
-	typedef Error (*FixUpEmbeddedPckFunc)(const String &p_path, int64_t p_embedded_start, int64_t p_embedded_size);
-
 private:
 	Ref<ImageTexture> logo;
 	String name;
@@ -418,8 +477,6 @@ private:
 
 	int chmod_flags;
 
-	FixUpEmbeddedPckFunc fixup_embedded_pck_func;
-
 public:
 	virtual void get_preset_features(const Ref<EditorExportPreset> &p_preset, List<String> *r_features);
 
@@ -429,10 +486,16 @@ public:
 	virtual String get_os_name() const;
 	virtual Ref<Texture> get_logo() const;
 
-	virtual bool can_export(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const;
+	virtual bool has_valid_export_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const;
+	virtual bool has_valid_project_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error) const;
 	virtual List<String> get_binary_extensions(const Ref<EditorExportPreset> &p_preset) const;
 	virtual Error export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags = 0);
 	virtual Error sign_shared_object(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path);
+
+	virtual Error prepare_template(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags);
+	virtual Error modify_template(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags) { return OK; }
+	virtual Error export_project_data(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags);
+	virtual Error fixup_embedded_pck(const String &p_path, int64_t p_embedded_start, int64_t p_embedded_size) { return OK; }
 
 	void set_extension(const String &p_extension, const String &p_feature_key = "default");
 	void set_name(const String &p_name);
@@ -452,9 +515,6 @@ public:
 	int get_chmod_flags() const;
 	void set_chmod_flags(int p_flags);
 
-	FixUpEmbeddedPckFunc get_fixup_embedded_pck_func() const;
-	void set_fixup_embedded_pck_func(FixUpEmbeddedPckFunc p_fixup_embedded_pck_func);
-
 	EditorExportPlatformPC();
 };
 
@@ -466,4 +526,4 @@ public:
 	EditorExportTextSceneToBinaryPlugin();
 };
 
-#endif // EDITOR_IMPORT_EXPORT_H
+#endif // EDITOR_EXPORT_H

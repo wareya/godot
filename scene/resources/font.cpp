@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  font.cpp                                                             */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  font.cpp                                                              */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "font.h"
 
@@ -98,7 +98,19 @@ void Font::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_wordwrap_string_size", "string", "width"), &Font::get_wordwrap_string_size);
 	ClassDB::bind_method(D_METHOD("has_outline"), &Font::has_outline);
 	ClassDB::bind_method(D_METHOD("draw_char", "canvas_item", "position", "char", "next", "modulate", "outline"), &Font::draw_char, DEFVAL(-1), DEFVAL(Color(1, 1, 1)), DEFVAL(false));
+
+	ClassDB::bind_method(D_METHOD("get_char_texture", "char", "next", "outline"), &Font::get_char_texture, DEFVAL(0), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("get_char_texture_size", "char", "next", "outline"), &Font::get_char_texture_size, DEFVAL(0), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("get_char_tx_offset", "char", "next", "outline"), &Font::get_char_tx_offset, DEFVAL(0), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("get_char_tx_size", "char", "next", "outline"), &Font::get_char_tx_size, DEFVAL(0), DEFVAL(false));
+	ClassDB::bind_method(D_METHOD("get_char_tx_uv_rect", "char", "next", "outline"), &Font::get_char_tx_uv_rect, DEFVAL(0), DEFVAL(false));
+
 	ClassDB::bind_method(D_METHOD("update_changes"), &Font::update_changes);
+	ClassDB::bind_method(D_METHOD("get_char_contours", "char", "next"), &Font::get_char_contours, DEFVAL(0));
+
+	BIND_ENUM_CONSTANT(CONTOUR_CURVE_TAG_ON);
+	BIND_ENUM_CONSTANT(CONTOUR_CURVE_TAG_OFF_CONIC);
+	BIND_ENUM_CONSTANT(CONTOUR_CURVE_TAG_OFF_CUBIC);
 }
 
 Font::Font() {
@@ -511,6 +523,18 @@ Size2 Font::get_wordwrap_string_size(const String &p_string, float p_width) cons
 	return Size2(p_width, h);
 }
 
+Size2 Font::total_size_of_lines(Vector<String> p_lines) {
+	int num_lines = p_lines.size();
+
+	Size2 size;
+	size.height = get_height() * num_lines;
+	for (int i = 0; i < num_lines; i++) {
+		Size2 line_size = get_string_size(p_lines[i]);
+		size.width = MAX(line_size.width, size.width);
+	}
+	return size;
+}
+
 void BitmapFont::set_fallback(const Ref<BitmapFont> &p_fallback) {
 	for (Ref<BitmapFont> fallback_child = p_fallback; fallback_child != nullptr; fallback_child = fallback_child->get_fallback()) {
 		ERR_FAIL_COND_MSG(fallback_child == this, "Can't set as fallback one of its parents to prevent crashes due to recursive loop.");
@@ -521,6 +545,140 @@ void BitmapFont::set_fallback(const Ref<BitmapFont> &p_fallback) {
 
 Ref<BitmapFont> BitmapFont::get_fallback() const {
 	return fallback;
+}
+
+RID BitmapFont::get_char_texture(CharType p_char, CharType p_next, bool p_outline) const {
+	int32_t ch = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		ch = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return RID();
+	}
+
+	const Character *c = char_map.getptr(ch);
+
+	if (!c) {
+		if (fallback.is_valid()) {
+			return fallback->get_char_texture(p_char, p_next, p_outline);
+		}
+		return RID();
+	}
+
+	ERR_FAIL_COND_V(c->texture_idx < -1 || c->texture_idx >= textures.size(), RID());
+	if (!p_outline && c->texture_idx != -1) {
+		return textures[c->texture_idx]->get_rid();
+	} else {
+		return RID();
+	}
+}
+
+Size2 BitmapFont::get_char_texture_size(CharType p_char, CharType p_next, bool p_outline) const {
+	int32_t ch = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		ch = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Size2();
+	}
+
+	const Character *c = char_map.getptr(ch);
+
+	if (!c) {
+		if (fallback.is_valid()) {
+			return fallback->get_char_texture_size(p_char, p_next, p_outline);
+		}
+		return Size2();
+	}
+
+	ERR_FAIL_COND_V(c->texture_idx < -1 || c->texture_idx >= textures.size(), Size2());
+	if (!p_outline && c->texture_idx != -1) {
+		return textures[c->texture_idx]->get_size();
+	} else {
+		return Size2();
+	}
+}
+
+Vector2 BitmapFont::get_char_tx_offset(CharType p_char, CharType p_next, bool p_outline) const {
+	int32_t ch = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		ch = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Vector2();
+	}
+
+	const Character *c = char_map.getptr(ch);
+
+	if (!c) {
+		if (fallback.is_valid()) {
+			return fallback->get_char_tx_offset(p_char, p_next, p_outline);
+		}
+		return Vector2();
+	}
+
+	ERR_FAIL_COND_V(c->texture_idx < -1 || c->texture_idx >= textures.size(), Vector2());
+	if (!p_outline && c->texture_idx != -1) {
+		Point2 cpos;
+		cpos.x += c->h_align;
+		cpos.y -= ascent;
+		cpos.y += c->v_align;
+		return cpos;
+	} else {
+		return Vector2();
+	}
+}
+
+Size2 BitmapFont::get_char_tx_size(CharType p_char, CharType p_next, bool p_outline) const {
+	int32_t ch = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		ch = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Size2();
+	}
+
+	const Character *c = char_map.getptr(ch);
+
+	if (!c) {
+		if (fallback.is_valid()) {
+			return fallback->get_char_tx_size(p_char, p_next, p_outline);
+		}
+		return Size2();
+	}
+
+	ERR_FAIL_COND_V(c->texture_idx < -1 || c->texture_idx >= textures.size(), Size2());
+	if (!p_outline && c->texture_idx != -1) {
+		return c->rect.size;
+	} else {
+		return Size2();
+	}
+}
+
+Rect2 BitmapFont::get_char_tx_uv_rect(CharType p_char, CharType p_next, bool p_outline) const {
+	int32_t ch = p_char;
+	if (((p_char & 0xfffffc00) == 0xd800) && (p_next & 0xfffffc00) == 0xdc00) { // decode surrogate pair.
+		ch = (p_char << 10UL) + p_next - ((0xd800 << 10UL) + 0xdc00 - 0x10000);
+	}
+	if ((p_char & 0xfffffc00) == 0xdc00) { // skip trail surrogate.
+		return Rect2();
+	}
+
+	const Character *c = char_map.getptr(ch);
+
+	if (!c) {
+		if (fallback.is_valid()) {
+			return fallback->get_char_tx_uv_rect(p_char, p_next, p_outline);
+		}
+		return Rect2();
+	}
+
+	ERR_FAIL_COND_V(c->texture_idx < -1 || c->texture_idx >= textures.size(), Rect2());
+	if (!p_outline && c->texture_idx != -1) {
+		return c->rect;
+	} else {
+		return Rect2();
+	}
 }
 
 float BitmapFont::draw_char(RID p_canvas_item, const Point2 &p_pos, CharType p_char, CharType p_next, const Color &p_modulate, bool p_outline) const {
@@ -642,7 +800,7 @@ BitmapFont::~BitmapFont() {
 
 ////////////
 
-RES ResourceFormatLoaderBMFont::load(const String &p_path, const String &p_original_path, Error *r_error) {
+RES ResourceFormatLoaderBMFont::load(const String &p_path, const String &p_original_path, Error *r_error, bool p_no_subresource_cache) {
 	if (r_error) {
 		*r_error = ERR_FILE_CANT_OPEN;
 	}

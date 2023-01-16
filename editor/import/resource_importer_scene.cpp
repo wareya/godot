@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  resource_importer_scene.cpp                                          */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  resource_importer_scene.cpp                                           */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "resource_importer_scene.h"
 
@@ -444,22 +444,18 @@ Node *ResourceImporterScene::_fix_node(Node *p_node, Node *p_root, Map<Ref<Mesh>
 				BoxShape *boxShape = memnew(BoxShape);
 				boxShape->set_extents(Vector3(1, 1, 1));
 				colshape->set_shape(boxShape);
-				colshape->set_name("BoxShape");
 			} else if (empty_draw_type == "SINGLE_ARROW") {
 				RayShape *rayShape = memnew(RayShape);
 				rayShape->set_length(1);
 				colshape->set_shape(rayShape);
-				colshape->set_name("RayShape");
 				Object::cast_to<Spatial>(sb)->rotate_x(Math_PI / 2);
 			} else if (empty_draw_type == "IMAGE") {
 				PlaneShape *planeShape = memnew(PlaneShape);
 				colshape->set_shape(planeShape);
-				colshape->set_name("PlaneShape");
 			} else {
 				SphereShape *sphereShape = memnew(SphereShape);
 				sphereShape->set_radius(1);
 				colshape->set_shape(sphereShape);
-				colshape->set_name("SphereShape");
 			}
 			sb->add_child(colshape);
 			colshape->set_owner(sb->get_owner());
@@ -486,7 +482,6 @@ Node *ResourceImporterScene::_fix_node(Node *p_node, Node *p_root, Map<Ref<Mesh>
 			p_node->replace_by(rigid_body);
 			rigid_body->set_transform(mi->get_transform());
 			p_node = rigid_body;
-			mi->set_name("mesh");
 			mi->set_transform(Transform());
 			rigid_body->add_child(mi);
 			mi->set_owner(rigid_body->get_owner());
@@ -526,7 +521,6 @@ Node *ResourceImporterScene::_fix_node(Node *p_node, Node *p_root, Map<Ref<Mesh>
 
 			if (shapes.size()) {
 				StaticBody *col = memnew(StaticBody);
-				col->set_name("static_collision");
 				mi->add_child(col);
 				col->set_owner(mi->get_owner());
 
@@ -615,7 +609,6 @@ Node *ResourceImporterScene::_fix_node(Node *p_node, Node *p_root, Map<Ref<Mesh>
 
 			if (shapes.size()) {
 				StaticBody *col = memnew(StaticBody);
-				col->set_name("static_collision");
 				p_node->add_child(col);
 				col->set_owner(p_node->get_owner());
 
@@ -1155,15 +1148,12 @@ void ResourceImporterScene::_replace_owner(Node *p_node, Node *p_scene, Node *p_
 }
 
 void ResourceImporterScene::_add_shapes(Node *p_node, const List<Ref<Shape>> &p_shapes) {
-	int idx = 0;
 	for (const List<Ref<Shape>>::Element *E = p_shapes.front(); E; E = E->next()) {
 		CollisionShape *cshape = memnew(CollisionShape);
 		cshape->set_shape(E->get());
 		p_node->add_child(cshape);
 
-		cshape->set_name("shape" + itos(idx));
 		cshape->set_owner(p_node->get_owner());
-		idx++;
 	}
 }
 
@@ -1427,7 +1417,7 @@ Error ResourceImporterScene::import(const String &p_source_file, const String &p
 				name = "Mesh " + itos(step);
 			}
 
-			progress2.step(TTR("Generating for Mesh: ") + name + " (" + itos(step) + "/" + itos(meshes.size()) + ")", step);
+			progress2.step(TTR("Generating for Mesh:") + " " + name + " (" + itos(step) + "/" + itos(meshes.size()) + ")", step);
 
 			int *ret_cache_data = cache_data;
 			unsigned int ret_cache_size = cache_size;

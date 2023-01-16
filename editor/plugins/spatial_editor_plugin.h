@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  spatial_editor_plugin.h                                              */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  spatial_editor_plugin.h                                               */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #ifndef SPATIAL_EDITOR_PLUGIN_H
 #define SPATIAL_EDITOR_PLUGIN_H
@@ -44,6 +44,7 @@ class SpatialEditor;
 class EditorSpatialGizmoPlugin;
 class ViewportContainer;
 class SpatialEditorViewport;
+class ViewportNavigationControl;
 
 class EditorSpatialGizmo : public SpatialGizmo {
 	GDCLASS(EditorSpatialGizmo, SpatialGizmo);
@@ -157,7 +158,7 @@ class ViewportRotationControl : public Control {
 	Vector<Color> axis_colors;
 	Vector<int> axis_menu_options;
 	Vector2i orbiting_mouse_start;
-	bool orbiting = false;
+	int orbiting_index = -1;
 	int focused_axis = -2;
 
 	const float AXIS_CIRCLE_RADIUS = 8.0f * EDSCALE;
@@ -171,6 +172,8 @@ protected:
 	void _get_sorted_axis(Vector<Axis2D> &r_axis);
 	void _update_focus();
 	void _on_mouse_exited();
+	void _process_click(int p_index, Vector2 p_position, bool p_pressed);
+	void _process_drag(Ref<InputEventWithModifiers> p_event, int p_index, Vector2 p_position, Vector2 p_relative_position);
 
 public:
 	void set_viewport(SpatialEditorViewport *p_viewport);
@@ -179,6 +182,7 @@ public:
 class SpatialEditorViewport : public Control {
 	GDCLASS(SpatialEditorViewport, Control);
 	friend class SpatialEditor;
+	friend class ViewportNavigationControl;
 	friend class ViewportRotationControl;
 	enum {
 
@@ -243,6 +247,7 @@ public:
 
 private:
 	int index;
+	bool _project_settings_change_pending;
 	ViewType view_type;
 	void _menu_option(int p_option);
 	void _set_auto_orthogonal();
@@ -283,7 +288,11 @@ private:
 	Label *zoom_limit_label;
 
 	VBoxContainer *top_right_vbox;
+	VBoxContainer *bottom_center_vbox;
+	ViewportNavigationControl *position_control;
+	ViewportNavigationControl *look_control;
 	ViewportRotationControl *rotation_control;
+	Gradient *frame_time_gradient;
 	Label *fps_label;
 
 	struct _RayResult {
@@ -326,6 +335,7 @@ private:
 	Vector<_RayResult> selection_results;
 	bool clicked_includes_current;
 	bool clicked_wants_append;
+	bool selection_in_progress = false;
 
 	PopupMenu *selection_menu;
 
@@ -339,7 +349,8 @@ private:
 		NAVIGATION_PAN,
 		NAVIGATION_ZOOM,
 		NAVIGATION_ORBIT,
-		NAVIGATION_LOOK
+		NAVIGATION_LOOK,
+		NAVIGATION_MOVE
 	};
 	enum TransformMode {
 		TRANSFORM_NONE,
@@ -417,6 +428,7 @@ private:
 
 	void _view_settings_confirmed(float p_interp_delta);
 	void _update_camera(float p_interp_delta);
+	void _update_navigation_controls_visibility();
 	Transform to_camera_transform(const Cursor &p_cursor) const;
 	void _draw();
 
@@ -432,6 +444,7 @@ private:
 	Camera *previewing;
 	Camera *preview;
 
+	bool previewing_camera;
 	bool previewing_cinema;
 	bool _is_node_locked(const Node *p_node);
 	void _preview_exited_scene();
@@ -458,6 +471,8 @@ private:
 	bool can_drop_data_fw(const Point2 &p_point, const Variant &p_data, Control *p_from) const;
 	void drop_data_fw(const Point2 &p_point, const Variant &p_data, Control *p_from);
 
+	void _project_settings_changed();
+
 protected:
 	void _notification(int p_what);
 	static void _bind_methods();
@@ -483,6 +498,7 @@ public:
 	Camera *get_camera() { return camera; } // return the default camera object.
 
 	SpatialEditorViewport(SpatialEditor *p_spatial_editor, EditorNode *p_editor, int p_index);
+	~SpatialEditorViewport();
 };
 
 class SpatialEditorSelectedItem : public Object {
@@ -706,11 +722,10 @@ private:
 	void _update_camera_override_button(bool p_game_running);
 	void _update_camera_override_viewport(Object *p_viewport);
 
-	HBoxContainer *hbc_menu;
 	// Used for secondary menu items which are displayed depending on the currently selected node
 	// (such as MeshInstance's "Mesh" menu).
-	PanelContainer *context_menu_container;
-	HBoxContainer *hbc_context_menu;
+	PanelContainer *context_menu_panel = nullptr;
+	HBoxContainer *context_menu_hbox = nullptr;
 
 	void _generate_selection_boxes();
 	UndoRedo *undo_redo;
@@ -747,6 +762,7 @@ private:
 
 	bool is_any_freelook_active() const;
 
+	void _selection_changed();
 	void _refresh_menu_icons();
 
 protected:
@@ -911,4 +927,32 @@ public:
 	virtual ~EditorSpatialGizmoPlugin();
 };
 
-#endif
+class ViewportNavigationControl : public Control {
+	GDCLASS(ViewportNavigationControl, Control);
+
+	SpatialEditorViewport *viewport = nullptr;
+	Vector2i focused_mouse_start;
+	Vector2 focused_pos;
+	bool hovered = false;
+	int focused_index = -1;
+	SpatialEditorViewport::NavigationMode nav_mode = SpatialEditorViewport::NavigationMode::NAVIGATION_NONE;
+
+	const float AXIS_CIRCLE_RADIUS = 30.0f * EDSCALE;
+
+protected:
+	static void _bind_methods();
+	void _notification(int p_what);
+	void _gui_input(Ref<InputEvent> p_event);
+	void _draw();
+	void _on_mouse_entered();
+	void _on_mouse_exited();
+	void _process_click(int p_index, Vector2 p_position, bool p_pressed);
+	void _process_drag(int p_index, Vector2 p_position, Vector2 p_relative_position);
+	void _update_navigation();
+
+public:
+	void set_navigation_mode(SpatialEditorViewport::NavigationMode p_nav_mode);
+	void set_viewport(SpatialEditorViewport *p_viewport);
+};
+
+#endif // SPATIAL_EDITOR_PLUGIN_H

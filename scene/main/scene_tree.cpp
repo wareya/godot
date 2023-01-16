@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  scene_tree.cpp                                                       */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  scene_tree.cpp                                                        */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "scene_tree.h"
 
@@ -38,9 +38,12 @@
 #include "core/os/os.h"
 #include "core/print_string.h"
 #include "core/project_settings.h"
+#include "core/variant_parser.h"
 #include "main/input_default.h"
 #include "node.h"
+#include "scene/animation/scene_tree_tween.h"
 #include "scene/debugger/script_debugger_remote.h"
+#include "scene/gui/shortcut.h"
 #include "scene/resources/dynamic_font.h"
 #include "scene/resources/material.h"
 #include "scene/resources/mesh.h"
@@ -102,6 +105,27 @@ void SceneTreeTimer::release_connections() {
 SceneTreeTimer::SceneTreeTimer() {
 	time_left = 0;
 	process_pause = true;
+}
+
+// This should be called once per physics tick, to make sure the transform previous and current
+// is kept up to date on the few spatials that are using client side physics interpolation
+void SceneTree::ClientPhysicsInterpolation::physics_process() {
+	for (SelfList<Spatial> *E = _spatials_list.first(); E;) {
+		Spatial *spatial = E->self();
+
+		SelfList<Spatial> *current = E;
+
+		// get the next element here BEFORE we potentially delete one
+		E = E->next();
+
+		// This will return false if the spatial has timed out ..
+		// i.e. If get_global_transform_interpolated() has not been called
+		// for a few seconds, we can delete from the list to keep processing
+		// to a minimum.
+		if (!spatial->update_client_physics_interpolation_data()) {
+			_spatials_list.remove(current);
+		}
+	}
 }
 
 void SceneTree::tree_changed() {
@@ -179,7 +203,8 @@ void SceneTree::_flush_ugc() {
 			v[i] = E->get()[i];
 		}
 
-		call_group_flags(GROUP_CALL_REALTIME, E->key().group, E->key().call, v[0], v[1], v[2], v[3], v[4]);
+		static_assert(VARIANT_ARG_MAX == 8, "This code needs to be updated if VARIANT_ARG_MAX != 8");
+		call_group_flags(GROUP_CALL_REALTIME, E->key().group, E->key().call, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
 
 		unique_group_calls.erase(E);
 	}
@@ -440,9 +465,35 @@ void SceneTree::input_event(const Ref<InputEvent> &p_event) {
 	call_group_flags(GROUP_CALL_REALTIME, "_viewports", "_vp_input", ev); //special one for GUI, as controls use their own process check
 
 	if (ScriptDebugger::get_singleton() && ScriptDebugger::get_singleton()->is_remote()) {
-		//quit from game window using F8
+		// Quit from game window using the stop shortcut (F8 by default).
+		// The custom shortcut is provided via environment variable when running from the editor.
+		if (debugger_stop_shortcut.is_null()) {
+			String shortcut_str = OS::get_singleton()->get_environment("__GODOT_EDITOR_STOP_SHORTCUT__");
+			if (!shortcut_str.empty()) {
+				Variant shortcut_var;
+
+				VariantParser::StreamString ss;
+				ss.s = shortcut_str;
+
+				String errs;
+				int line;
+				VariantParser::parse(&ss, shortcut_var, errs, line);
+				debugger_stop_shortcut = shortcut_var;
+			}
+
+			if (debugger_stop_shortcut.is_null()) {
+				// Define a default shortcut if it wasn't provided or is invalid.
+				Ref<InputEventKey> ie;
+				ie.instance();
+				ie->set_scancode(KEY_F8);
+				ie->set_unicode(KEY_F8);
+				debugger_stop_shortcut.instance();
+				debugger_stop_shortcut->set_shortcut(ie);
+			}
+		}
+
 		Ref<InputEventKey> k = ev;
-		if (k.is_valid() && k->is_pressed() && !k->is_echo() && k->get_scancode() == KEY_F8) {
+		if (k.is_valid() && k->is_pressed() && !k->is_echo() && debugger_stop_shortcut->is_shortcut(k)) {
 			ScriptDebugger::get_singleton()->request_quit();
 		}
 	}
@@ -474,10 +525,55 @@ void SceneTree::init() {
 	MainLoop::init();
 }
 
+void SceneTree::set_physics_interpolation_enabled(bool p_enabled) {
+	// disallow interpolation in editor
+	if (Engine::get_singleton()->is_editor_hint()) {
+		p_enabled = false;
+	}
+
+	if (p_enabled == _physics_interpolation_enabled) {
+		return;
+	}
+
+	_physics_interpolation_enabled = p_enabled;
+	VisualServer::get_singleton()->set_physics_interpolation_enabled(p_enabled);
+}
+
+bool SceneTree::is_physics_interpolation_enabled() const {
+	return _physics_interpolation_enabled;
+}
+
+void SceneTree::client_physics_interpolation_add_spatial(SelfList<Spatial> *p_elem) {
+	// This ensures that _update_physics_interpolation_data() will be called at least once every
+	// physics tick, to ensure the previous and current transforms are kept up to date.
+	_client_physics_interpolation._spatials_list.add(p_elem);
+}
+
+void SceneTree::client_physics_interpolation_remove_spatial(SelfList<Spatial> *p_elem) {
+	_client_physics_interpolation._spatials_list.remove(p_elem);
+}
+
+void SceneTree::iteration_end() {
+	// When physics interpolation is active, we want all pending transforms
+	// to be flushed to the VisualServer before finishing a physics tick.
+	if (_physics_interpolation_enabled) {
+		flush_transform_notifications();
+	}
+}
+
 bool SceneTree::iteration(float p_time) {
 	root_lock++;
 
 	current_frame++;
+
+	if (_physics_interpolation_enabled) {
+		VisualServer::get_singleton()->tick();
+	}
+
+	// Any objects performing client physics interpolation
+	// should be given an opportunity to keep their previous transforms
+	// up to take before each new physics tick.
+	_client_physics_interpolation.physics_process();
 
 	flush_transform_notifications();
 
@@ -493,6 +589,9 @@ bool SceneTree::iteration(float p_time) {
 	_notify_group_pause("physics_process", Node::NOTIFICATION_PHYSICS_PROCESS);
 	_flush_ugc();
 	MessageQueue::get_singleton()->flush(); //small little hack
+
+	process_tweens(p_time, true);
+
 	flush_transform_notifications();
 	call_group_flags(GROUP_CALL_REALTIME, "_viewports", "update_worlds");
 	root_lock--;
@@ -536,7 +635,7 @@ bool SceneTree::idle(float p_time) {
 	_notify_group_pause("idle_process_internal", Node::NOTIFICATION_INTERNAL_PROCESS);
 	_notify_group_pause("idle_process", Node::NOTIFICATION_PROCESS);
 
-	Size2 win_size = Size2(OS::get_singleton()->get_window_size().width, OS::get_singleton()->get_window_size().height);
+	Size2 win_size = OS::get_singleton()->get_window_size();
 
 	if (win_size != last_screen_size) {
 		last_screen_size = win_size;
@@ -585,9 +684,13 @@ bool SceneTree::idle(float p_time) {
 		E = N;
 	}
 
+	process_tweens(p_time, false);
+
 	flush_transform_notifications(); //additional transforms after timers update
 
 	_call_idle_callbacks();
+
+	ProjectSettings::get_singleton()->update();
 
 #ifdef TOOLS_ENABLED
 
@@ -616,7 +719,37 @@ bool SceneTree::idle(float p_time) {
 
 #endif
 
+	if (_physics_interpolation_enabled) {
+		VisualServer::get_singleton()->pre_draw(true);
+	}
+
 	return _quit;
+}
+
+void SceneTree::process_tweens(float p_delta, bool p_physics) {
+	// This methods works similarly to how SceneTreeTimers are handled.
+	List<Ref<SceneTreeTween>>::Element *L = tweens.back();
+
+	for (List<Ref<SceneTreeTween>>::Element *E = tweens.front(); E;) {
+		List<Ref<SceneTreeTween>>::Element *N = E->next();
+		// Don't process if paused or process mode doesn't match.
+		if (!E->get()->can_process(pause) || (p_physics == (E->get()->get_process_mode() == Tween::TWEEN_PROCESS_IDLE))) {
+			if (E == L) {
+				break;
+			}
+			E = N;
+			continue;
+		}
+
+		if (!E->get()->step(p_delta)) {
+			E->get()->clear();
+			tweens.erase(E);
+		}
+		if (E == L) {
+			break;
+		}
+		E = N;
+	}
 }
 
 void SceneTree::finish() {
@@ -630,7 +763,7 @@ void SceneTree::finish() {
 
 	if (root) {
 		root->_set_tree(nullptr);
-		root->_propagate_after_exit_tree();
+		root->_propagate_after_exit_branch(true);
 		memdelete(root); //delete root
 		root = nullptr;
 	}
@@ -644,6 +777,12 @@ void SceneTree::finish() {
 		E->get()->release_connections();
 	}
 	timers.clear();
+
+	// Cleanup tweens.
+	for (List<Ref<SceneTreeTween>>::Element *E = tweens.front(); E; E = E->next()) {
+		E->get()->clear();
+	}
+	tweens.clear();
 }
 
 void SceneTree::quit(int p_exit_code) {
@@ -718,8 +857,16 @@ void SceneTree::_notification(int p_notification) {
 	};
 };
 
+bool SceneTree::is_auto_accept_quit() const {
+	return accept_quit;
+}
+
 void SceneTree::set_auto_accept_quit(bool p_enable) {
 	accept_quit = p_enable;
+}
+
+bool SceneTree::is_quit_on_go_back() const {
+	return quit_on_go_back;
 }
 
 void SceneTree::set_quit_on_go_back(bool p_enable) {
@@ -1023,11 +1170,12 @@ Variant SceneTree::_call_group_flags(const Variant **p_args, int p_argcount, Var
 	StringName method = *p_args[2];
 	Variant v[VARIANT_ARG_MAX];
 
-	for (int i = 0; i < MIN(p_argcount - 3, 5); i++) {
+	for (int i = 0; i < MIN(p_argcount - 3, VARIANT_ARG_MAX); i++) {
 		v[i] = *p_args[i + 3];
 	}
 
-	call_group_flags(flags, group, method, v[0], v[1], v[2], v[3], v[4]);
+	static_assert(VARIANT_ARG_MAX == 8, "This code needs to be updated if VARIANT_ARG_MAX != 8");
+	call_group_flags(flags, group, method, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
 	return Variant();
 }
 
@@ -1103,20 +1251,77 @@ void SceneTree::get_nodes_in_group(const StringName &p_group, List<Node *> *p_li
 void SceneTree::_flush_delete_queue() {
 	_THREAD_SAFE_METHOD_
 
-	while (delete_queue.size()) {
-		Object *obj = ObjectDB::get_instance(delete_queue.front()->get());
+	// Sorting the delete queue by child count (in respect to their parent)
+	// is an optimization because nodes benefit immensely from being deleted
+	// in reverse order to their child count. This is partly due to ordered_remove(), and partly
+	// due to notifications being sent to children that are moved, further in the child list.
+	struct ObjectIDComparator {
+		_FORCE_INLINE_ bool operator()(const DeleteQueueElement &p, const DeleteQueueElement &q) const {
+			return (p.child_list_id > q.child_list_id);
+		}
+	};
+
+	delete_queue.sort_custom<ObjectIDComparator>();
+
+	for (uint32_t e = 0; e < delete_queue.size(); e++) {
+		ObjectID id = delete_queue[e].id;
+		Object *obj = ObjectDB::get_instance(id);
 		if (obj) {
 			memdelete(obj);
 		}
-		delete_queue.pop_front();
 	}
+
+	delete_queue.clear();
 }
 
 void SceneTree::queue_delete(Object *p_object) {
 	_THREAD_SAFE_METHOD_
 	ERR_FAIL_NULL(p_object);
+
+	// Guard against the user queueing multiple times,
+	// which is unnecessary.
+	if (p_object->is_queued_for_deletion()) {
+		return;
+	}
+
 	p_object->_is_queued_for_deletion = true;
-	delete_queue.push_back(p_object->get_instance_id());
+
+	DeleteQueueElement e;
+	e.id = p_object->get_instance_id();
+
+	// Storing the list id within the parent allows us
+	// to sort the delete queue in reverse for more efficient
+	// deletion.
+	// Note that data.pos could alternatively be read during flush_delete_queue(),
+	// however reading it here avoids an extra lookup, and should be correct in most cases.
+	// And worst case if the child_list_id changes in the meantime, it will still work, it may just
+	// be slightly slower.
+	const Node *node = Object::cast_to<Node>(p_object);
+	if (node) {
+		e.child_list_id = node->data.pos;
+
+		// Have some grouping by parent object ID,
+		// so that children tend to be deleted together.
+		// This should be more cache friendly.
+		if (node->data.parent) {
+			ObjectID parent_id = node->data.parent->get_instance_id();
+
+			// Use a prime number to combine the group with the child id.
+			// Provided there are less than the prime number children in a node,
+			// there will be no collisions. Even if there are collisions, it is no problem.
+			uint32_t group = parent_id * 937;
+
+			// Rollover the group, we never want the group + the child id
+			// to overflow 31 bits
+			group &= ~(0b111 << 29);
+			e.child_list_id += (int32_t)group;
+		}
+	} else {
+		// For non-nodes, there is no point in sorting them.
+		e.child_list_id = -2;
+	}
+
+	delete_queue.push_back(e);
 }
 
 int SceneTree::get_node_count() const {
@@ -1135,7 +1340,7 @@ void SceneTree::_update_root_rect() {
 	}
 
 	//actual screen video mode
-	Size2 video_mode = Size2(OS::get_singleton()->get_window_size().width, OS::get_singleton()->get_window_size().height);
+	Size2 video_mode = OS::get_singleton()->get_window_size();
 	Size2 desired_res = stretch_min;
 
 	Size2 viewport_size;
@@ -1721,6 +1926,23 @@ Ref<SceneTreeTimer> SceneTree::create_timer(float p_delay_sec, bool p_process_pa
 	return stt;
 }
 
+Ref<SceneTreeTween> SceneTree::create_tween() {
+	Ref<SceneTreeTween> tween = memnew(SceneTreeTween(true));
+	tweens.push_back(tween);
+	return tween;
+}
+
+Array SceneTree::get_processed_tweens() {
+	Array ret;
+	ret.resize(tweens.size());
+
+	for (int i = 0; i < tweens.size(); i++) {
+		ret[i] = tweens[i];
+	}
+
+	return ret;
+}
+
 void SceneTree::_network_peer_connected(int p_id) {
 	emit_signal("network_peer_connected", p_id);
 }
@@ -1814,7 +2036,9 @@ void SceneTree::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_root"), &SceneTree::get_root);
 	ClassDB::bind_method(D_METHOD("has_group", "name"), &SceneTree::has_group);
 
+	ClassDB::bind_method(D_METHOD("is_auto_accept_quit"), &SceneTree::is_auto_accept_quit);
 	ClassDB::bind_method(D_METHOD("set_auto_accept_quit", "enabled"), &SceneTree::set_auto_accept_quit);
+	ClassDB::bind_method(D_METHOD("is_quit_on_go_back"), &SceneTree::is_quit_on_go_back);
 	ClassDB::bind_method(D_METHOD("set_quit_on_go_back", "enabled"), &SceneTree::set_quit_on_go_back);
 
 	ClassDB::bind_method(D_METHOD("set_debug_collisions_hint", "enable"), &SceneTree::set_debug_collisions_hint);
@@ -1831,12 +2055,17 @@ void SceneTree::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("is_input_handled"), &SceneTree::is_input_handled);
 
 	ClassDB::bind_method(D_METHOD("create_timer", "time_sec", "pause_mode_process"), &SceneTree::create_timer, DEFVAL(true));
+	ClassDB::bind_method(D_METHOD("create_tween"), &SceneTree::create_tween);
+	ClassDB::bind_method(D_METHOD("get_processed_tweens"), &SceneTree::get_processed_tweens);
 
 	ClassDB::bind_method(D_METHOD("get_node_count"), &SceneTree::get_node_count);
 	ClassDB::bind_method(D_METHOD("get_frame"), &SceneTree::get_frame);
 	ClassDB::bind_method(D_METHOD("quit", "exit_code"), &SceneTree::quit, DEFVAL(-1));
 
 	ClassDB::bind_method(D_METHOD("set_screen_stretch", "mode", "aspect", "minsize", "scale"), &SceneTree::set_screen_stretch, DEFVAL(1));
+
+	ClassDB::bind_method(D_METHOD("set_physics_interpolation_enabled", "enabled"), &SceneTree::set_physics_interpolation_enabled);
+	ClassDB::bind_method(D_METHOD("is_physics_interpolation_enabled"), &SceneTree::is_physics_interpolation_enabled);
 
 	ClassDB::bind_method(D_METHOD("queue_delete", "obj"), &SceneTree::queue_delete);
 
@@ -1895,6 +2124,8 @@ void SceneTree::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_use_font_oversampling", "enable"), &SceneTree::set_use_font_oversampling);
 	ClassDB::bind_method(D_METHOD("is_using_font_oversampling"), &SceneTree::is_using_font_oversampling);
 
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "auto_accept_quit"), "set_auto_accept_quit", "is_auto_accept_quit");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "quit_on_go_back"), "set_quit_on_go_back", "is_quit_on_go_back");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_collisions_hint"), "set_debug_collisions_hint", "is_debugging_collisions_hint");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "debug_navigation_hint"), "set_debug_navigation_hint", "is_debugging_navigation_hint");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "paused"), "set_pause", "is_paused");
@@ -1907,6 +2138,7 @@ void SceneTree::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "root", PROPERTY_HINT_RESOURCE_TYPE, "Node", 0), "", "get_root");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "multiplayer", PROPERTY_HINT_RESOURCE_TYPE, "MultiplayerAPI", 0), "set_multiplayer", "get_multiplayer");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "multiplayer_poll"), "set_multiplayer_poll_enabled", "is_multiplayer_poll_enabled");
+	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "physics_interpolation"), "set_physics_interpolation_enabled", "is_physics_interpolation_enabled");
 
 	ADD_SIGNAL(MethodInfo("tree_changed"));
 	ADD_SIGNAL(MethodInfo("node_added", PropertyInfo(Variant::OBJECT, "node", PROPERTY_HINT_RESOURCE_TYPE, "Node")));
@@ -2027,8 +2259,8 @@ SceneTree::SceneTree() {
 	GLOBAL_DEF("debug/shapes/collision/draw_2d_outlines", true);
 
 	tree_version = 1;
-	physics_process_time = 1;
-	idle_process_time = 1;
+	physics_process_time = 0.f;
+	idle_process_time = 0.f;
 
 	root = nullptr;
 	input_handled = false;
@@ -2043,6 +2275,7 @@ SceneTree::SceneTree() {
 	call_lock = 0;
 	root_lock = 0;
 	node_count = 0;
+	_physics_interpolation_enabled = false;
 
 	//create with mainloop
 
@@ -2053,25 +2286,35 @@ SceneTree::SceneTree() {
 		root->set_world(Ref<World>(memnew(World)));
 	}
 
+	set_physics_interpolation_enabled(GLOBAL_DEF("physics/common/physics_interpolation", false));
+	// Always disable jitter fix if physics interpolation is enabled -
+	// Jitter fix will interfere with interpolation, and is not necessary
+	// when interpolation is active.
+	if (is_physics_interpolation_enabled()) {
+		Engine::get_singleton()->set_physics_jitter_fix(0);
+	}
+
 	// Initialize network state
 	multiplayer_poll = true;
 	set_multiplayer(Ref<MultiplayerAPI>(memnew(MultiplayerAPI)));
 
-	//root->set_world_2d( Ref<World2D>( memnew( World2D )));
 	root->set_as_audio_listener(true);
 	root->set_as_audio_listener_2d(true);
 	current_scene = nullptr;
 
 	int ref_atlas_size = GLOBAL_DEF_RST("rendering/quality/reflections/atlas_size", 2048);
-	ProjectSettings::get_singleton()->set_custom_property_info("rendering/quality/reflections/atlas_size", PropertyInfo(Variant::INT, "rendering/quality/reflections/atlas_size", PROPERTY_HINT_RANGE, "0,8192,or_greater")); //next_power_of_2 will return a 0 as min value
+	ProjectSettings::get_singleton()->set_custom_property_info("rendering/quality/reflections/atlas_size", PropertyInfo(Variant::INT, "rendering/quality/reflections/atlas_size", PROPERTY_HINT_RANGE, "0,8192,1,or_greater")); // next_power_of_2 will return a 0 as min value.
 	int ref_atlas_subdiv = GLOBAL_DEF_RST("rendering/quality/reflections/atlas_subdiv", 8);
-	ProjectSettings::get_singleton()->set_custom_property_info("rendering/quality/reflections/atlas_subdiv", PropertyInfo(Variant::INT, "rendering/quality/reflections/atlas_subdiv", PROPERTY_HINT_RANGE, "0,32,or_greater")); //next_power_of_2 will return a 0 as min value
+	ProjectSettings::get_singleton()->set_custom_property_info("rendering/quality/reflections/atlas_subdiv", PropertyInfo(Variant::INT, "rendering/quality/reflections/atlas_subdiv", PROPERTY_HINT_RANGE, "0,32,1,or_greater")); // next_power_of_2 will return a 0 as min value.
 	int msaa_mode = GLOBAL_DEF("rendering/quality/filters/msaa", 0);
 	ProjectSettings::get_singleton()->set_custom_property_info("rendering/quality/filters/msaa", PropertyInfo(Variant::INT, "rendering/quality/filters/msaa", PROPERTY_HINT_ENUM, "Disabled,2x,4x,8x,16x,AndroidVR 2x,AndroidVR 4x"));
 	root->set_msaa(Viewport::MSAA(msaa_mode));
 
 	const bool use_fxaa = GLOBAL_DEF("rendering/quality/filters/use_fxaa", false);
 	root->set_use_fxaa(use_fxaa);
+
+	const bool transparent_background = GLOBAL_DEF("rendering/viewport/transparent_background", false);
+	root->set_transparent_background(transparent_background);
 
 	const bool use_debanding = GLOBAL_DEF("rendering/quality/filters/use_debanding", false);
 	root->set_use_debanding(use_debanding);
@@ -2128,7 +2371,7 @@ SceneTree::SceneTree() {
 	stretch_aspect = STRETCH_ASPECT_IGNORE;
 	stretch_scale = 1.0;
 
-	last_screen_size = Size2(OS::get_singleton()->get_window_size().width, OS::get_singleton()->get_window_size().height);
+	last_screen_size = OS::get_singleton()->get_window_size();
 	_update_root_rect();
 
 	if (ScriptDebugger::get_singleton()) {
@@ -2156,7 +2399,7 @@ SceneTree::SceneTree() {
 SceneTree::~SceneTree() {
 	if (root) {
 		root->_set_tree(nullptr);
-		root->_propagate_after_exit_tree();
+		root->_propagate_after_exit_branch(true);
 		memdelete(root);
 	}
 

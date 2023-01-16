@@ -89,6 +89,7 @@ namespace Godot
         /// <param name="instance">The string to check.</param>
         /// <param name="text">The beginning string.</param>
         /// <returns>If the string begins with the given string.</returns>
+        [Obsolete("Use string.StartsWith instead.")]
         public static bool BeginsWith(this string instance, string text)
         {
             return instance.StartsWith(text);
@@ -266,7 +267,7 @@ namespace Godot
         /// <returns>The capitalized string.</returns>
         public static string Capitalize(this string instance)
         {
-            string aux = instance.Replace("_", " ").ToLower();
+            string aux = instance.CamelcaseToUnderscore(true).Replace("_", " ").Trim();
             string cap = string.Empty;
 
             for (int i = 0; i < aux.GetSliceCount(" "); i++)
@@ -282,6 +283,51 @@ namespace Godot
             }
 
             return cap;
+        }
+
+        private static string CamelcaseToUnderscore(this string instance, bool lowerCase)
+        {
+            string newString = string.Empty;
+            int startIndex = 0;
+
+            for (int i = 1; i < instance.Length; i++)
+            {
+                bool isUpper = char.IsUpper(instance[i]);
+                bool isNumber = char.IsDigit(instance[i]);
+
+                bool areNext2Lower = false;
+                bool isNextLower = false;
+                bool isNextNumber = false;
+                bool wasPrecedentUpper = char.IsUpper(instance[i - 1]);
+                bool wasPrecedentNumber = char.IsDigit(instance[i - 1]);
+
+                if (i + 2 < instance.Length)
+                {
+                    areNext2Lower = char.IsLower(instance[i + 1]) && char.IsLower(instance[i + 2]);
+                }
+
+                if (i + 1 < instance.Length)
+                {
+                    isNextLower = char.IsLower(instance[i + 1]);
+                    isNextNumber = char.IsDigit(instance[i + 1]);
+                }
+
+                bool condA = isUpper && !wasPrecedentUpper && !wasPrecedentNumber;
+                bool condB = wasPrecedentUpper && isUpper && areNext2Lower;
+                bool condC = isNumber && !wasPrecedentNumber;
+                bool canBreakNumberLetter = isNumber && !wasPrecedentNumber && isNextLower;
+                bool canBreakLetterNumber = !isNumber && wasPrecedentNumber && (isNextLower || isNextNumber);
+
+                bool shouldSplit = condA || condB || condC || canBreakNumberLetter || canBreakLetterNumber;
+                if (shouldSplit)
+                {
+                    newString += instance.Substring(startIndex, i - startIndex) + "_";
+                    startIndex = i;
+                }
+            }
+
+            newString += instance.Substring(startIndex, instance.Length - startIndex);
+            return lowerCase ? newString.ToLower() : newString;
         }
 
         /// <summary>
@@ -360,6 +406,7 @@ namespace Godot
         /// <summary>
         /// Returns <see langword="true"/> if the string is empty.
         /// </summary>
+        [Obsolete("Use string.IsNullOrEmpty instead.")]
         public static bool Empty(this string instance)
         {
             return string.IsNullOrEmpty(instance);
@@ -372,6 +419,7 @@ namespace Godot
         /// <param name="instance">The string to check.</param>
         /// <param name="text">The ending string.</param>
         /// <returns>If the string ends with the given string.</returns>
+        [Obsolete("Use string.EndsWith instead.")]
         public static bool EndsWith(this string instance, string text)
         {
             return instance.EndsWith(text);
@@ -383,6 +431,7 @@ namespace Godot
         /// <param name="instance">The string to modify.</param>
         /// <param name="pos">Starting position from which to erase.</param>
         /// <param name="chars">Amount of characters to erase.</param>
+        [Obsolete("Use StringBuilder.Remove instead.")]
         public static void Erase(this StringBuilder instance, int pos, int chars)
         {
             instance.Remove(pos, chars);
@@ -695,6 +744,7 @@ namespace Godot
         /// The string with <paramref name="what"/> inserted at the given
         /// position <paramref name="pos"/>.
         /// </returns>
+        [Obsolete("Use string.Insert instead.")]
         public static string Insert(this string instance, int pos, string what)
         {
             return instance.Insert(pos, what);
@@ -929,6 +979,7 @@ namespace Godot
         /// </summary>
         /// <param name="instance">The string to check.</param>
         /// <returns>The length of the string.</returns>
+        [Obsolete("Use string.Length property instead.")]
         public static int Length(this string instance)
         {
             return instance.Length;
@@ -941,6 +992,7 @@ namespace Godot
         /// <param name="instance">The string to remove characters from.</param>
         /// <param name="chars">The characters to be removed.</param>
         /// <returns>A copy of the string with characters removed from the left.</returns>
+        [Obsolete("Use string.TrimStart property instead.")]
         public static string LStrip(this string instance, string chars)
         {
             int len = instance.Length;
@@ -1075,6 +1127,7 @@ namespace Godot
         /// <param name="instance">The string to check.</param>
         /// <param name="at">The position int the string for the character to check.</param>
         /// <returns>The character code.</returns>
+        [Obsolete("Use string[int] indexer instead.")]
         public static int OrdAt(this string instance, int at)
         {
             return instance[at];
@@ -1276,6 +1329,7 @@ namespace Godot
         /// <param name="instance">The string to remove characters from.</param>
         /// <param name="chars">The characters to be removed.</param>
         /// <returns>A copy of the string with characters removed from the right.</returns>
+        [Obsolete("Use string.TrimEnd property instead.")]
         public static string RStrip(this string instance, string chars)
         {
             int len = instance.Length;
@@ -1515,6 +1569,7 @@ namespace Godot
         /// <seealso cref="ToUpper(string)"/>
         /// <param name="instance">The string to convert.</param>
         /// <returns>The string converted to lowercase.</returns>
+        [Obsolete("Use string.ToLower instead.")]
         public static string ToLower(this string instance)
         {
             return instance.ToLower();
@@ -1526,6 +1581,7 @@ namespace Godot
         /// <seealso cref="ToLower(string)"/>
         /// <param name="instance">The string to convert.</param>
         /// <returns>The string converted to uppercase.</returns>
+        [Obsolete("Use string.ToUpper instead.")]
         public static string ToUpper(this string instance)
         {
             return instance.ToUpper();

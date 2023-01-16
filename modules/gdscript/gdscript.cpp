@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  gdscript.cpp                                                         */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  gdscript.cpp                                                          */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "gdscript.h"
 
@@ -110,6 +110,9 @@ GDScriptInstance *GDScript::_create_instance(const Variant **p_args, int p_argco
 	instances.insert(instance->owner);
 	GDScriptLanguage::singleton->lock.unlock();
 
+	if (p_argcount < 0) {
+		return instance;
+	}
 	initializer->call(instance, p_args, p_argcount, r_error);
 
 	if (r_error.error != Variant::CallError::CALL_OK) {
@@ -123,9 +126,8 @@ GDScriptInstance *GDScript::_create_instance(const Variant **p_args, int p_argco
 		GDScriptLanguage::singleton->lock.unlock();
 #endif
 
-		ERR_FAIL_COND_V(r_error.error != Variant::CallError::CALL_OK, nullptr); //error constructing
+		ERR_FAIL_V_MSG(nullptr, "Error constructing a GDScriptInstance.");
 	}
-
 	//@TODO make thread safe
 	return instance;
 }
@@ -450,7 +452,19 @@ bool GDScript::_update_exports(bool *r_err, bool p_recursive_call, PlaceHolderSc
 				}
 
 				members_cache.push_back(c->variables[i]._export);
-				member_default_values_cache[c->variables[i].identifier] = c->variables[i].default_value;
+
+				Variant::Type default_value_type = c->variables[i].default_value.get_type();
+				Variant::Type export_type = c->variables[i]._export.type;
+
+				// Convert the default value to the export type to avoid issues with the property editor and scene serialization.
+				// This is done only in the export side, the script itself will use the default value with no type change.
+				if (default_value_type != Variant::NIL && default_value_type != export_type) {
+					Variant::CallError ce;
+					const Variant *args = &c->variables[i].default_value;
+					member_default_values_cache[c->variables[i].identifier] = Variant::construct(export_type, &args, 1, ce);
+				} else {
+					member_default_values_cache[c->variables[i].identifier] = c->variables[i].default_value;
+				}
 			}
 
 			_signals.clear();
@@ -582,7 +596,7 @@ Error GDScript::reload(bool p_keep_state) {
 			GDScriptLanguage::get_singleton()->debug_break_parse(_get_debug_path(), parser.get_error_line(), "Parser Error: " + parser.get_error());
 		}
 		_err_print_error("GDScript::reload", path.empty() ? "built-in" : (const char *)path.utf8().get_data(), parser.get_error_line(), ("Parse Error: " + parser.get_error()).utf8().get_data(), ERR_HANDLER_SCRIPT);
-		ERR_FAIL_V(ERR_PARSE_ERROR);
+		return ERR_PARSE_ERROR;
 	}
 
 	bool can_run = ScriptServer::is_scripting_enabled() || parser.is_tool_script();
@@ -596,7 +610,7 @@ Error GDScript::reload(bool p_keep_state) {
 				GDScriptLanguage::get_singleton()->debug_break_parse(_get_debug_path(), compiler.get_error_line(), "Parser Error: " + compiler.get_error());
 			}
 			_err_print_error("GDScript::reload", path.empty() ? "built-in" : (const char *)path.utf8().get_data(), compiler.get_error_line(), ("Compile Error: " + compiler.get_error()).utf8().get_data(), ERR_HANDLER_SCRIPT);
-			ERR_FAIL_V(ERR_COMPILATION_FAILED);
+			return ERR_COMPILATION_FAILED;
 		} else {
 			return err;
 		}
@@ -2014,6 +2028,10 @@ String GDScriptWarning::get_message() const {
 		case STANDALONE_TERNARY: {
 			return "Standalone ternary conditional operator: the return value is being discarded.";
 		}
+		case EXPORT_HINT_TYPE_MISTMATCH: {
+			CHECK_SYMBOLS(2);
+			return vformat("The type of the default value (%s) doesn't match the type of the export hint (%s). The type won't be coerced.", symbols[0], symbols[1]);
+		}
 		case WARNING_MAX:
 			break; // Can't happen, but silences warning
 	}
@@ -2057,6 +2075,7 @@ String GDScriptWarning::get_name_from_code(Code p_code) {
 		"UNSAFE_CALL_ARGUMENT",
 		"DEPRECATED_KEYWORD",
 		"STANDALONE_TERNARY",
+		"EXPORT_HINT_TYPE_MISTMATCH",
 		nullptr
 	};
 
@@ -2172,7 +2191,7 @@ Ref<GDScript> GDScriptLanguage::get_orphan_subclass(const String &p_qualified_na
 
 /*************** RESOURCE ***************/
 
-RES ResourceFormatLoaderGDScript::load(const String &p_path, const String &p_original_path, Error *r_error) {
+RES ResourceFormatLoaderGDScript::load(const String &p_path, const String &p_original_path, Error *r_error, bool p_no_subresource_cache) {
 	if (r_error) {
 		*r_error = ERR_FILE_CANT_OPEN;
 	}

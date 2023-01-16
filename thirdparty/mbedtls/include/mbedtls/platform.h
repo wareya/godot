@@ -11,6 +11,13 @@
  *        implementations of these functions, or implementations specific to
  *        their platform, which can be statically linked to the library or
  *        dynamically configured at runtime.
+ *
+ *        When all compilation options related to platform abstraction are
+ *        disabled, this header just defines `mbedtls_xxx` function names
+ *        as aliases to the standard `xxx` function.
+ *
+ *        Most modules in the library and example programs are expected to
+ *        include this header.
  */
 /*
  *  Copyright The Mbed TLS Contributors
@@ -70,7 +77,9 @@ extern "C" {
 #if !defined(MBEDTLS_PLATFORM_NO_STD_FUNCTIONS)
 #include <stdio.h>
 #include <stdlib.h>
+#if defined(MBEDTLS_HAVE_TIME)
 #include <time.h>
+#endif
 #if !defined(MBEDTLS_PLATFORM_STD_SNPRINTF)
 #if defined(MBEDTLS_PLATFORM_HAS_NON_CONFORMING_SNPRINTF)
 #define MBEDTLS_PLATFORM_STD_SNPRINTF   mbedtls_platform_win32_snprintf /**< The default \c snprintf function to use.  */
@@ -127,7 +136,7 @@ extern "C" {
 #endif /* MBEDTLS_PLATFORM_NO_STD_FUNCTIONS */
 
 
-/* \} name SECTION: Module settings */
+/** \} name SECTION: Module settings */
 
 /*
  * The function pointers for calloc and free.

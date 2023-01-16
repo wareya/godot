@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  doc_data.cpp                                                         */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  doc_data.cpp                                                          */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "doc_data.h"
 
@@ -39,6 +39,7 @@
 #include "core/script_language.h"
 #include "core/translation.h"
 #include "core/version.h"
+#include "editor/editor_settings.h"
 #include "scene/resources/theme.h"
 
 static String _get_indent(const String &p_text) {
@@ -290,8 +291,15 @@ void DocData::generate(bool p_basic_types) {
 
 		List<PropertyInfo> properties;
 		List<PropertyInfo> own_properties;
-		if (name == "ProjectSettings") {
-			//special case for project settings, so settings can be documented
+
+		// Special case for editor and project settings, so they can be documented.
+		if (name == "EditorSettings") {
+			// We don't create the full blown EditorSettings (+ config file) with `create()`,
+			// instead we just make a local instance to get default values.
+			Ref<EditorSettings> edset = memnew(EditorSettings);
+			edset->get_property_list(&properties);
+			own_properties = properties;
+		} else if (name == "ProjectSettings") {
 			ProjectSettings::get_singleton()->get_property_list(&properties);
 			own_properties = properties;
 		} else {
@@ -325,6 +333,13 @@ void DocData::generate(bool p_basic_types) {
 
 			bool default_value_valid = false;
 			Variant default_value;
+
+			if (name == "EditorSettings") {
+				if (E->get().name == "resource_local_to_scene" || E->get().name == "resource_name" || E->get().name == "resource_path" || E->get().name == "script") {
+					// Don't include spurious properties in the generated EditorSettings class reference.
+					continue;
+				}
+			}
 
 			if (name == "ProjectSettings") {
 				// Special case for project settings, so that settings are not taken from the current project's settings
@@ -1083,7 +1098,12 @@ Error DocData::save_classes(const String &p_default_path, const Map<String, Stri
 			header += " inherits=\"" + c.inherits + "\"";
 		}
 		header += String(" version=\"") + VERSION_BRANCH + "\"";
-		header += ">";
+		// Reference the XML schema so editors can provide error checking.
+		// Modules are nested deep, so change the path to reference the same schema everywhere.
+		const String schema_path = save_path.find("modules/") != -1 ? "../../../doc/class.xsd" : "../class.xsd";
+		header += vformat(
+				R"( xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="%s">)",
+				schema_path);
 		_write_string(f, 0, header);
 
 		_write_string(f, 1, "<brief_description>");
@@ -1097,7 +1117,7 @@ Error DocData::save_classes(const String &p_default_path, const Map<String, Stri
 		_write_string(f, 1, "<tutorials>");
 		for (int i = 0; i < c.tutorials.size(); i++) {
 			TutorialDoc tutorial = c.tutorials.get(i);
-			String title_attribute = (!tutorial.title.empty()) ? " title=\"" + tutorial.title.xml_escape() + "\"" : "";
+			String title_attribute = (!tutorial.title.empty()) ? " title=\"" + _translate_doc_string(tutorial.title).xml_escape() + "\"" : "";
 			_write_string(f, 2, "<link" + title_attribute + ">" + tutorial.link.xml_escape() + "</link>");
 		}
 		_write_string(f, 1, "</tutorials>");
@@ -1249,7 +1269,8 @@ Error DocData::save_classes(const String &p_default_path, const Map<String, Stri
 Error DocData::load_compressed(const uint8_t *p_data, int p_compressed_size, int p_uncompressed_size) {
 	Vector<uint8_t> data;
 	data.resize(p_uncompressed_size);
-	Compression::decompress(data.ptrw(), p_uncompressed_size, p_data, p_compressed_size, Compression::MODE_DEFLATE);
+	int ret = Compression::decompress(data.ptrw(), p_uncompressed_size, p_data, p_compressed_size, Compression::MODE_DEFLATE);
+	ERR_FAIL_COND_V_MSG(ret == -1, ERR_FILE_CORRUPT, "Compressed file is corrupt.");
 	class_list.clear();
 
 	Ref<XMLParser> parser = memnew(XMLParser);

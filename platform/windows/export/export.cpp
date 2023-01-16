@@ -1,35 +1,36 @@
-/*************************************************************************/
-/*  export.cpp                                                           */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  export.cpp                                                            */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "export.h"
 
+#include "core/io/image_loader.h"
 #include "core/os/file_access.h"
 #include "core/os/os.h"
 #include "editor/editor_export.h"
@@ -37,17 +38,146 @@
 #include "editor/editor_settings.h"
 #include "platform/windows/logo.gen.h"
 
-static Error fixup_embedded_pck(const String &p_path, int64_t p_embedded_start, int64_t p_embedded_size);
-
 class EditorExportPlatformWindows : public EditorExportPlatformPC {
-	void _rcedit_add_data(const Ref<EditorExportPreset> &p_preset, const String &p_path);
+	Error _process_icon(const Ref<EditorExportPreset> &p_preset, const String &p_src_path, const String &p_dst_path);
+	Error _rcedit_add_data(const Ref<EditorExportPreset> &p_preset, const String &p_path);
 	Error _code_sign(const Ref<EditorExportPreset> &p_preset, const String &p_path);
 
 public:
 	virtual Error export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags = 0);
 	virtual Error sign_shared_object(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path);
+	virtual Error modify_template(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags);
+	virtual Error fixup_embedded_pck(const String &p_path, int64_t p_embedded_start, int64_t p_embedded_size);
 	virtual void get_export_options(List<ExportOption> *r_options);
+	virtual bool get_option_visibility(const EditorExportPreset *p_preset, const String &p_option, const Map<StringName, Variant> &p_options) const;
+	virtual bool has_valid_export_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const;
+	virtual bool has_valid_project_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error) const;
 };
+
+Error EditorExportPlatformWindows::_process_icon(const Ref<EditorExportPreset> &p_preset, const String &p_src_path, const String &p_dst_path) {
+	static const uint8_t icon_size[] = { 16, 32, 48, 64, 128, 0 /*256*/ };
+
+	struct IconData {
+		PoolVector<uint8_t> data;
+		uint8_t pal_colors = 0;
+		uint16_t planes = 0;
+		uint16_t bpp = 32;
+	};
+
+	HashMap<uint8_t, IconData> images;
+	Error err;
+
+	if (p_src_path.get_extension() == "ico") {
+		FileAccess *f = FileAccess::open(p_src_path, FileAccess::READ, &err);
+		if (err != OK) {
+			return err;
+		}
+
+		// Read ICONDIR.
+		f->get_16(); // Reserved.
+		uint16_t icon_type = f->get_16(); // Image type: 1 - ICO.
+		uint16_t icon_count = f->get_16(); // Number of images.
+		if (icon_type != 1) {
+			f->close();
+			memdelete(f);
+
+			ERR_FAIL_V(ERR_CANT_OPEN);
+		}
+
+		for (uint16_t i = 0; i < icon_count; i++) {
+			// Read ICONDIRENTRY.
+			uint16_t w = f->get_8(); // Width in pixels.
+			uint16_t h = f->get_8(); // Height in pixels.
+			uint8_t pal_colors = f->get_8(); // Number of colors in the palette (0 - no palette).
+			f->get_8(); // Reserved.
+			uint16_t planes = f->get_16(); // Number of color planes.
+			uint16_t bpp = f->get_16(); // Bits per pixel.
+			uint32_t img_size = f->get_32(); // Image data size in bytes.
+			uint32_t img_offset = f->get_32(); // Image data offset.
+			if (w != h) {
+				continue;
+			}
+
+			// Read image data.
+			uint64_t prev_offset = f->get_position();
+			images[w].pal_colors = pal_colors;
+			images[w].planes = planes;
+			images[w].bpp = bpp;
+			images[w].data.resize(img_size);
+			PoolVector<uint8_t>::Write wr = images[w].data.write();
+			f->seek(img_offset);
+			f->get_buffer(wr.ptr(), img_size);
+			f->seek(prev_offset);
+		}
+		f->close();
+		memdelete(f);
+	} else {
+		Ref<Image> src_image;
+		src_image.instance();
+		err = ImageLoader::load_image(p_src_path, src_image.ptr());
+		ERR_FAIL_COND_V(err != OK || src_image->empty(), ERR_CANT_OPEN);
+		for (size_t i = 0; i < sizeof(icon_size) / sizeof(icon_size[0]); ++i) {
+			int size = (icon_size[i] == 0) ? 256 : icon_size[i];
+
+			Ref<Image> res_image = src_image->duplicate();
+			ERR_FAIL_COND_V(res_image.is_null() || res_image->empty(), ERR_CANT_OPEN);
+			res_image->resize(size, size, (Image::Interpolation)(p_preset->get("application/icon_interpolation").operator int()));
+			images[icon_size[i]].data = res_image->save_png_to_buffer();
+		}
+	}
+
+	uint16_t valid_icon_count = 0;
+	for (size_t i = 0; i < sizeof(icon_size) / sizeof(icon_size[0]); ++i) {
+		if (images.has(icon_size[i])) {
+			valid_icon_count++;
+		} else {
+			int size = (icon_size[i] == 0) ? 256 : icon_size[i];
+			add_message(EXPORT_MESSAGE_WARNING, TTR("Resources Modification"), vformat(TTR("Icon size \"%d\" is missing."), size));
+		}
+	}
+	ERR_FAIL_COND_V(valid_icon_count == 0, ERR_CANT_OPEN);
+
+	FileAccess *fw = FileAccess::open(p_dst_path, FileAccess::WRITE, &err);
+	if (err != OK) {
+		return err;
+	}
+
+	// Write ICONDIR.
+	fw->store_16(0); // Reserved.
+	fw->store_16(1); // Image type: 1 - ICO.
+	fw->store_16(valid_icon_count); // Number of images.
+
+	// Write ICONDIRENTRY.
+	uint32_t img_offset = 6 + 16 * valid_icon_count;
+	for (size_t i = 0; i < sizeof(icon_size) / sizeof(icon_size[0]); ++i) {
+		if (images.has(icon_size[i])) {
+			const IconData &di = images[icon_size[i]];
+			fw->store_8(icon_size[i]); // Width in pixels.
+			fw->store_8(icon_size[i]); // Height in pixels.
+			fw->store_8(di.pal_colors); // Number of colors in the palette (0 - no palette).
+			fw->store_8(0); // Reserved.
+			fw->store_16(di.planes); // Number of color planes.
+			fw->store_16(di.bpp); // Bits per pixel.
+			fw->store_32(di.data.size()); // Image data size in bytes.
+			fw->store_32(img_offset); // Image data offset.
+
+			img_offset += di.data.size();
+		}
+	}
+
+	// Write image data.
+	for (size_t i = 0; i < sizeof(icon_size) / sizeof(icon_size[0]); ++i) {
+		if (images.has(icon_size[i])) {
+			const IconData &di = images[icon_size[i]];
+			PoolVector<uint8_t>::Read r = di.data.read();
+			fw->store_buffer(r.ptr(), di.data.size());
+		}
+	}
+	fw->close();
+	memdelete(fw);
+
+	return OK;
+}
 
 Error EditorExportPlatformWindows::sign_shared_object(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path) {
 	if (p_preset->get("codesign/enable")) {
@@ -57,29 +187,48 @@ Error EditorExportPlatformWindows::sign_shared_object(const Ref<EditorExportPres
 	}
 }
 
-Error EditorExportPlatformWindows::export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags) {
-	Error err = EditorExportPlatformPC::export_project(p_preset, p_debug, p_path, p_flags);
+Error EditorExportPlatformWindows::modify_template(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags) {
+	if (p_preset->get("application/modify_resources")) {
+		_rcedit_add_data(p_preset, p_path);
+	}
+	return OK;
+}
 
-	if (err != OK) {
-		return err;
+Error EditorExportPlatformWindows::export_project(const Ref<EditorExportPreset> &p_preset, bool p_debug, const String &p_path, int p_flags) {
+	String pck_path = p_path;
+	if (p_preset->get("binary_format/embed_pck")) {
+		pck_path = p_path.get_basename() + ".tmp";
 	}
 
-	_rcedit_add_data(p_preset, p_path);
-
+	Error err = EditorExportPlatformPC::export_project(p_preset, p_debug, pck_path, p_flags);
 	if (p_preset->get("codesign/enable") && err == OK) {
-		err = _code_sign(p_preset, p_path);
+		_code_sign(p_preset, pck_path);
+	}
+
+	if (p_preset->get("binary_format/embed_pck") && err == OK) {
+		DirAccessRef tmp_dir = DirAccess::create_for_path(p_path.get_base_dir());
+		err = tmp_dir->rename(pck_path, p_path);
+		if (err != OK) {
+			add_message(EXPORT_MESSAGE_ERROR, TTR("PCK Embedding"), vformat(TTR("Failed to rename temporary file \"%s\"."), pck_path));
+		}
 	}
 
 	return err;
+}
+
+bool EditorExportPlatformWindows::get_option_visibility(const EditorExportPreset *p_preset, const String &p_option, const Map<StringName, Variant> &p_options) const {
+	// This option is not supported by "osslsigncode", used on non-Windows host.
+	if (!OS::get_singleton()->has_feature("Windows") && p_option == "codesign/identity_type") {
+		return false;
+	}
+	return true;
 }
 
 void EditorExportPlatformWindows::get_export_options(List<ExportOption> *r_options) {
 	EditorExportPlatformPC::get_export_options(r_options);
 
 	r_options->push_back(ExportOption(PropertyInfo(Variant::BOOL, "codesign/enable"), false));
-#ifdef WINDOWS_ENABLED
 	r_options->push_back(ExportOption(PropertyInfo(Variant::INT, "codesign/identity_type", PROPERTY_HINT_ENUM, "Select automatically,Use PKCS12 file (specify *.PFX/*.P12 file),Use certificate store (specify SHA1 hash)"), 0));
-#endif
 	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "codesign/identity", PROPERTY_HINT_GLOBAL_FILE, "*.pfx,*.p12"), ""));
 	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "codesign/password"), ""));
 	r_options->push_back(ExportOption(PropertyInfo(Variant::BOOL, "codesign/timestamp"), true));
@@ -88,9 +237,11 @@ void EditorExportPlatformWindows::get_export_options(List<ExportOption> *r_optio
 	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "codesign/description"), ""));
 	r_options->push_back(ExportOption(PropertyInfo(Variant::POOL_STRING_ARRAY, "codesign/custom_options"), PoolStringArray()));
 
-	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/icon", PROPERTY_HINT_FILE, "*.ico"), ""));
-	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/file_version", PROPERTY_HINT_PLACEHOLDER_TEXT, "1.0.0"), ""));
-	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/product_version", PROPERTY_HINT_PLACEHOLDER_TEXT, "1.0.0"), ""));
+	r_options->push_back(ExportOption(PropertyInfo(Variant::BOOL, "application/modify_resources"), true));
+	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/icon", PROPERTY_HINT_FILE, "*.ico,*.png,*.webp,*.svg"), ""));
+	r_options->push_back(ExportOption(PropertyInfo(Variant::INT, "application/icon_interpolation", PROPERTY_HINT_ENUM, "Nearest neighbor,Bilinear,Cubic,Trilinear,Lanczos"), 4));
+	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/file_version", PROPERTY_HINT_PLACEHOLDER_TEXT, "1.0.0.0"), ""));
+	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/product_version", PROPERTY_HINT_PLACEHOLDER_TEXT, "1.0.0.0"), ""));
 	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/company_name", PROPERTY_HINT_PLACEHOLDER_TEXT, "Company Name"), ""));
 	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/product_name", PROPERTY_HINT_PLACEHOLDER_TEXT, "Game Name"), ""));
 	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/file_description"), ""));
@@ -98,16 +249,16 @@ void EditorExportPlatformWindows::get_export_options(List<ExportOption> *r_optio
 	r_options->push_back(ExportOption(PropertyInfo(Variant::STRING, "application/trademarks"), ""));
 }
 
-void EditorExportPlatformWindows::_rcedit_add_data(const Ref<EditorExportPreset> &p_preset, const String &p_path) {
+Error EditorExportPlatformWindows::_rcedit_add_data(const Ref<EditorExportPreset> &p_preset, const String &p_path) {
 	String rcedit_path = EditorSettings::get_singleton()->get("export/windows/rcedit");
 
-	if (rcedit_path == String()) {
-		return;
+	if (rcedit_path != String() && !FileAccess::exists(rcedit_path)) {
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Resources Modification"), vformat(TTR("Could not find rcedit executable at \"%s\"."), rcedit_path));
+		return ERR_FILE_NOT_FOUND;
 	}
 
-	if (!FileAccess::exists(rcedit_path)) {
-		ERR_PRINT("Could not find rcedit executable at " + rcedit_path + ", no icon or app information data will be included.");
-		return;
+	if (rcedit_path == String()) {
+		rcedit_path = "rcedit"; // try to run rcedit from PATH
 	}
 
 #ifndef WINDOWS_ENABLED
@@ -115,8 +266,8 @@ void EditorExportPlatformWindows::_rcedit_add_data(const Ref<EditorExportPreset>
 	String wine_path = EditorSettings::get_singleton()->get("export/windows/wine");
 
 	if (wine_path != String() && !FileAccess::exists(wine_path)) {
-		ERR_PRINT("Could not find wine executable at " + wine_path + ", no icon or app information data will be included.");
-		return;
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Resources Modification"), vformat(TTR("Could not find wine executable at \"%s\"."), wine_path));
+		return ERR_FILE_NOT_FOUND;
 	}
 
 	if (wine_path == String()) {
@@ -125,6 +276,14 @@ void EditorExportPlatformWindows::_rcedit_add_data(const Ref<EditorExportPreset>
 #endif
 
 	String icon_path = ProjectSettings::get_singleton()->globalize_path(p_preset->get("application/icon"));
+	String tmp_icon_path = EditorSettings::get_singleton()->get_cache_dir().plus_file("_rcedit.ico");
+	if (!icon_path.empty()) {
+		if (_process_icon(p_preset, icon_path, tmp_icon_path) != OK) {
+			add_message(EXPORT_MESSAGE_WARNING, TTR("Resources Modification"), vformat(TTR("Invalid icon file \"%s\"."), icon_path));
+			icon_path = String();
+		}
+	}
+
 	String file_verion = p_preset->get("application/file_version");
 	String product_version = p_preset->get("application/product_version");
 	String company_name = p_preset->get("application/company_name");
@@ -138,7 +297,7 @@ void EditorExportPlatformWindows::_rcedit_add_data(const Ref<EditorExportPreset>
 	args.push_back(p_path);
 	if (icon_path != String()) {
 		args.push_back("--set-icon");
-		args.push_back(icon_path);
+		args.push_back(tmp_icon_path);
 	}
 	if (file_verion != String()) {
 		args.push_back("--set-file-version");
@@ -174,13 +333,31 @@ void EditorExportPlatformWindows::_rcedit_add_data(const Ref<EditorExportPreset>
 		args.push_back(trademarks);
 	}
 
-#ifdef WINDOWS_ENABLED
-	OS::get_singleton()->execute(rcedit_path, args, true);
-#else
+#ifndef WINDOWS_ENABLED
 	// On non-Windows we need WINE to run rcedit
 	args.push_front(rcedit_path);
-	OS::get_singleton()->execute(wine_path, args, true);
+	rcedit_path = wine_path;
 #endif
+
+	String str;
+	Error err = OS::get_singleton()->execute(rcedit_path, args, true, nullptr, &str, nullptr, true);
+
+	if (FileAccess::exists(tmp_icon_path)) {
+		DirAccess::remove_file_or_error(tmp_icon_path);
+	}
+
+	if (err != OK || (str.find("not found") != -1) || (str.find("not recognized") != -1)) {
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Resources Modification"), TTR("Could not start rcedit executable. Configure rcedit path in the Editor Settings (Export > Windows > rcedit), or disable \"Application > Modify Resources\" in the export preset."));
+		return err;
+	}
+	print_line("rcedit (" + p_path + "): " + str);
+
+	if (str.find("Fatal error") != -1) {
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Resources Modification"), vformat(TTR("rcedit failed to modify executable: %s."), str));
+		return FAILED;
+	}
+
+	return OK;
 }
 
 Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_preset, const String &p_path) {
@@ -189,7 +366,7 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 #ifdef WINDOWS_ENABLED
 	String signtool_path = EditorSettings::get_singleton()->get("export/windows/signtool");
 	if (signtool_path != String() && !FileAccess::exists(signtool_path)) {
-		ERR_PRINT("Could not find signtool executable at " + signtool_path + ", aborting.");
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), vformat(TTR("Could not find signtool executable at \"%s\"."), signtool_path));
 		return ERR_FILE_NOT_FOUND;
 	}
 	if (signtool_path == String()) {
@@ -198,7 +375,7 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 #else
 	String signtool_path = EditorSettings::get_singleton()->get("export/windows/osslsigncode");
 	if (signtool_path != String() && !FileAccess::exists(signtool_path)) {
-		ERR_PRINT("Could not find osslsigncode executable at " + signtool_path + ", aborting.");
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), vformat(TTR("Could not find osslsigncode executable at \"%s\"."), signtool_path));
 		return ERR_FILE_NOT_FOUND;
 	}
 	if (signtool_path == String()) {
@@ -218,7 +395,7 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 			args.push_back("/f");
 			args.push_back(p_preset->get("codesign/identity"));
 		} else {
-			EditorNode::add_io_error("codesign: no identity found");
+			add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), TTR("No identity found."));
 			return FAILED;
 		}
 	} else if (id_type == 2) { //Windows certificate store
@@ -226,11 +403,11 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 			args.push_back("/sha1");
 			args.push_back(p_preset->get("codesign/identity"));
 		} else {
-			EditorNode::add_io_error("codesign: no identity found");
+			add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), TTR("No identity found."));
 			return FAILED;
 		}
 	} else {
-		EditorNode::add_io_error("codesign: invalid identity type");
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), TTR("Invalid identity type."));
 		return FAILED;
 	}
 #else
@@ -238,7 +415,7 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 		args.push_back("-pkcs12");
 		args.push_back(p_preset->get("codesign/identity"));
 	} else {
-		EditorNode::add_io_error("codesign: no identity found");
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), TTR("No identity found."));
 		return FAILED;
 	}
 #endif
@@ -270,7 +447,7 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 			args.push_back(p_preset->get("codesign/timestamp_server_url"));
 #endif
 		} else {
-			EditorNode::add_io_error("codesign: invalid timestamp server");
+			add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), TTR("Invalid timestamp server."));
 			return FAILED;
 		}
 	}
@@ -317,7 +494,14 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 
 	String str;
 	Error err = OS::get_singleton()->execute(signtool_path, args, true, nullptr, &str, nullptr, true);
-	ERR_FAIL_COND_V(err != OK, err);
+	if (err != OK || (str.find("not found") != -1) || (str.find("not recognized") != -1)) {
+#ifndef WINDOWS_ENABLED
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), TTR("Could not start signtool executable. Configure signtool path in the Editor Settings (Export > Windows > signtool), or disable \"Codesign\" in the export preset."));
+#else
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), TTR("Could not start osslsigncode executable. Configure signtool path in the Editor Settings (Export > Windows > osslsigncode), or disable \"Codesign\" in the export preset."));
+#endif
+		return err;
+	}
 
 	print_line("codesign (" + p_path + "): " + str);
 #ifndef WINDOWS_ENABLED
@@ -325,6 +509,7 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 #else
 	if (str.find("Failed") != -1) {
 #endif
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), vformat(TTR("Signtool failed to sign executable: %s."), str));
 		return FAILED;
 	}
 
@@ -332,54 +517,86 @@ Error EditorExportPlatformWindows::_code_sign(const Ref<EditorExportPreset> &p_p
 	DirAccessRef tmp_dir = DirAccess::create_for_path(p_path.get_base_dir());
 
 	err = tmp_dir->remove(p_path);
-	ERR_FAIL_COND_V(err != OK, err);
+	if (err != OK) {
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), vformat(TTR("Failed to remove temporary file \"%s\"."), p_path));
+		return err;
+	}
 
 	err = tmp_dir->rename(p_path + "_signed", p_path);
-	ERR_FAIL_COND_V(err != OK, err);
+	if (err != OK) {
+		add_message(EXPORT_MESSAGE_WARNING, TTR("Code Signing"), vformat(TTR("Failed to rename temporary file \"%s\"."), p_path + "_signed"));
+		return err;
+	}
 #endif
 
 	return OK;
 }
 
-void register_windows_exporter() {
-	EDITOR_DEF("export/windows/rcedit", "");
-	EditorSettings::get_singleton()->add_property_hint(PropertyInfo(Variant::STRING, "export/windows/rcedit", PROPERTY_HINT_GLOBAL_FILE, "*.exe"));
-#ifdef WINDOWS_ENABLED
-	EDITOR_DEF("export/windows/signtool", "");
-	EditorSettings::get_singleton()->add_property_hint(PropertyInfo(Variant::STRING, "export/windows/signtool", PROPERTY_HINT_GLOBAL_FILE, "*.exe"));
-#else
-	EDITOR_DEF("export/windows/osslsigncode", "");
-	EditorSettings::get_singleton()->add_property_hint(PropertyInfo(Variant::STRING, "export/windows/osslsigncode", PROPERTY_HINT_GLOBAL_FILE));
-	// On non-Windows we need WINE to run rcedit
-	EDITOR_DEF("export/windows/wine", "");
-	EditorSettings::get_singleton()->add_property_hint(PropertyInfo(Variant::STRING, "export/windows/wine", PROPERTY_HINT_GLOBAL_FILE));
-#endif
+bool EditorExportPlatformWindows::has_valid_export_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error, bool &r_missing_templates) const {
+	String err = "";
+	bool valid = EditorExportPlatformPC::has_valid_export_configuration(p_preset, err, r_missing_templates);
 
-	Ref<EditorExportPlatformWindows> platform;
-	platform.instance();
+	String rcedit_path = EditorSettings::get_singleton()->get("export/windows/rcedit");
+	if (p_preset->get("application/modify_resources") && rcedit_path.empty()) {
+		err += TTR("The rcedit tool must be configured in the Editor Settings (Export > Windows > rcedit) to change the icon or app information data.") + "\n";
+	}
 
-	Ref<Image> img = memnew(Image(_windows_logo));
-	Ref<ImageTexture> logo;
-	logo.instance();
-	logo->create_from_image(img);
-	platform->set_logo(logo);
-	platform->set_name("Windows Desktop");
-	platform->set_extension("exe");
-	platform->set_release_32("windows_32_release.exe");
-	platform->set_debug_32("windows_32_debug.exe");
-	platform->set_release_64("windows_64_release.exe");
-	platform->set_debug_64("windows_64_debug.exe");
-	platform->set_os_name("Windows");
-	platform->set_fixup_embedded_pck_func(&fixup_embedded_pck);
+	if (!err.empty()) {
+		r_error = err;
+	}
 
-	EditorExport::get_singleton()->add_export_platform(platform);
+	return valid;
 }
 
-static Error fixup_embedded_pck(const String &p_path, int64_t p_embedded_start, int64_t p_embedded_size) {
+bool EditorExportPlatformWindows::has_valid_project_configuration(const Ref<EditorExportPreset> &p_preset, String &r_error) const {
+	String err = "";
+	bool valid = true;
+
+	String icon_path = ProjectSettings::get_singleton()->globalize_path(p_preset->get("application/icon"));
+	if (!icon_path.empty() && !FileAccess::exists(icon_path)) {
+		err += TTR("Invalid icon path:") + " " + icon_path + "\n";
+	}
+
+	// Only non-negative integers can exist in the version string.
+
+	String file_version = p_preset->get("application/file_version");
+	if (!file_version.empty()) {
+		Vector<String> version_array = file_version.split(".", false);
+		if (version_array.size() != 4 || !version_array[0].is_valid_integer() ||
+				!version_array[1].is_valid_integer() || !version_array[2].is_valid_integer() ||
+				!version_array[3].is_valid_integer() || file_version.find("-") > -1) {
+			err += TTR("Invalid file version:") + " " + file_version + "\n";
+		}
+	}
+
+	String product_version = p_preset->get("application/product_version");
+	if (!product_version.empty()) {
+		Vector<String> version_array = product_version.split(".", false);
+		if (version_array.size() != 4 || !version_array[0].is_valid_integer() ||
+				!version_array[1].is_valid_integer() || !version_array[2].is_valid_integer() ||
+				!version_array[3].is_valid_integer() || product_version.find("-") > -1) {
+			err += TTR("Invalid product version:") + " " + product_version + "\n";
+		}
+	}
+
+	if (!err.empty()) {
+		r_error = err;
+	}
+
+	return valid;
+}
+
+Error EditorExportPlatformWindows::fixup_embedded_pck(const String &p_path, int64_t p_embedded_start, int64_t p_embedded_size) {
 	// Patch the header of the "pck" section in the PE file so that it corresponds to the embedded data
+
+	if (p_embedded_size + p_embedded_start >= 0x100000000) { // Check for total executable size
+		add_message(EXPORT_MESSAGE_ERROR, TTR("PCK Embedding"), TTR("Windows executables cannot be >= 4 GiB."));
+		return ERR_INVALID_DATA;
+	}
 
 	FileAccess *f = FileAccess::open(p_path, FileAccess::READ_WRITE);
 	if (!f) {
+		add_message(EXPORT_MESSAGE_ERROR, TTR("PCK Embedding"), vformat(TTR("Failed to open executable file \"%s\"."), p_path));
 		return ERR_CANT_OPEN;
 	}
 
@@ -392,6 +609,7 @@ static Error fixup_embedded_pck(const String &p_path, int64_t p_embedded_start, 
 		uint32_t magic = f->get_32();
 		if (magic != 0x00004550) {
 			f->close();
+			add_message(EXPORT_MESSAGE_ERROR, TTR("PCK Embedding"), TTR("Executable file header corrupted."));
 			return ERR_FILE_CORRUPT;
 		}
 	}
@@ -443,5 +661,44 @@ static Error fixup_embedded_pck(const String &p_path, int64_t p_embedded_start, 
 
 	f->close();
 
-	return found ? OK : ERR_FILE_CORRUPT;
+	if (!found) {
+		add_message(EXPORT_MESSAGE_ERROR, TTR("PCK Embedding"), TTR("Executable \"pck\" section not found."));
+		return ERR_FILE_CORRUPT;
+	}
+	return OK;
+}
+
+void register_windows_exporter() {
+#ifndef ANDROID_ENABLED
+	EDITOR_DEF("export/windows/rcedit", "");
+	EditorSettings::get_singleton()->add_property_hint(PropertyInfo(Variant::STRING, "export/windows/rcedit", PROPERTY_HINT_GLOBAL_FILE, "*.exe"));
+#ifdef WINDOWS_ENABLED
+	EDITOR_DEF("export/windows/signtool", "");
+	EditorSettings::get_singleton()->add_property_hint(PropertyInfo(Variant::STRING, "export/windows/signtool", PROPERTY_HINT_GLOBAL_FILE, "*.exe"));
+#else
+	EDITOR_DEF("export/windows/osslsigncode", "");
+	EditorSettings::get_singleton()->add_property_hint(PropertyInfo(Variant::STRING, "export/windows/osslsigncode", PROPERTY_HINT_GLOBAL_FILE));
+	// On non-Windows we need WINE to run rcedit
+	EDITOR_DEF("export/windows/wine", "");
+	EditorSettings::get_singleton()->add_property_hint(PropertyInfo(Variant::STRING, "export/windows/wine", PROPERTY_HINT_GLOBAL_FILE));
+#endif
+#endif
+
+	Ref<EditorExportPlatformWindows> platform;
+	platform.instance();
+
+	Ref<Image> img = memnew(Image(_windows_logo));
+	Ref<ImageTexture> logo;
+	logo.instance();
+	logo->create_from_image(img);
+	platform->set_logo(logo);
+	platform->set_name("Windows Desktop");
+	platform->set_extension("exe");
+	platform->set_release_32("windows_32_release.exe");
+	platform->set_debug_32("windows_32_debug.exe");
+	platform->set_release_64("windows_64_release.exe");
+	platform->set_debug_64("windows_64_debug.exe");
+	platform->set_os_name("Windows");
+
+	EditorExport::get_singleton()->add_export_platform(platform);
 }

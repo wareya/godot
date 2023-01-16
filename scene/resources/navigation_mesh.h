@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  navigation_mesh.h                                                    */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  navigation_mesh.h                                                     */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #ifndef NAVIGATION_MESH_H
 #define NAVIGATION_MESH_H
@@ -34,9 +34,12 @@
 #include "scene/resources/mesh.h"
 
 class Mesh;
+class NavigationMeshGenerator;
 
 class NavigationMesh : public Resource {
 	GDCLASS(NavigationMesh, Resource);
+
+	friend class NavigationMeshGenerator;
 
 	PoolVector<Vector3> vertices;
 	struct Polygon {
@@ -55,6 +58,11 @@ class NavigationMesh : public Resource {
 protected:
 	static void _bind_methods();
 	virtual void _validate_property(PropertyInfo &property) const;
+
+#ifndef DISABLE_DEPRECATED
+	bool _set(const StringName &p_name, const Variant &p_value);
+	bool _get(const StringName &p_name, Variant &r_ret) const;
+#endif // DISABLE_DEPRECATED
 
 	void _set_polygons(const Array &p_array);
 	Array _get_polygons() const;
@@ -82,30 +90,32 @@ public:
 	};
 
 protected:
-	float cell_size;
-	float cell_height;
-	float agent_height;
-	float agent_radius;
-	float agent_max_climb;
-	float agent_max_slope;
-	float region_min_size;
-	float region_merge_size;
-	float edge_max_length;
-	float edge_max_error;
-	float verts_per_poly;
-	float detail_sample_distance;
-	float detail_sample_max_error;
+	float cell_size = 0.25f;
+	float cell_height = 0.25f;
+	float agent_height = 1.5f;
+	float agent_radius = 0.5f;
+	float agent_max_climb = 0.25f;
+	float agent_max_slope = 45.0f;
+	float region_min_size = 2.0f;
+	float region_merge_size = 20.0f;
+	float edge_max_length = 12.0f;
+	float edge_max_error = 1.3f;
+	float verts_per_poly = 6.0f;
+	float detail_sample_distance = 6.0f;
+	float detail_sample_max_error = 1.0f;
 
-	SamplePartitionType partition_type;
-	ParsedGeometryType parsed_geometry_type;
-	uint32_t collision_mask;
+	SamplePartitionType partition_type = SAMPLE_PARTITION_WATERSHED;
+	ParsedGeometryType parsed_geometry_type = PARSED_GEOMETRY_MESH_INSTANCES;
+	uint32_t collision_mask = 0xFFFFFFFF;
 
-	SourceGeometryMode source_geometry_mode;
-	StringName source_group_name;
+	SourceGeometryMode source_geometry_mode = SOURCE_GEOMETRY_NAVMESH_CHILDREN;
+	StringName source_group_name = "navmesh";
 
-	bool filter_low_hanging_obstacles;
-	bool filter_ledge_spans;
-	bool filter_walkable_low_height_spans;
+	bool filter_low_hanging_obstacles = false;
+	bool filter_ledge_spans = false;
+	bool filter_walkable_low_height_spans = false;
+	AABB filter_baking_aabb;
+	Vector3 filter_baking_aabb_offset;
 
 public:
 	// Recast settings
@@ -174,6 +184,12 @@ public:
 
 	void set_filter_walkable_low_height_spans(bool p_value);
 	bool get_filter_walkable_low_height_spans() const;
+
+	void set_filter_baking_aabb(const AABB &p_aabb);
+	AABB get_filter_baking_aabb() const;
+
+	void set_filter_baking_aabb_offset(const Vector3 &p_aabb_offset);
+	Vector3 get_filter_baking_aabb_offset() const;
 
 	void create_from_mesh(const Ref<Mesh> &p_mesh);
 

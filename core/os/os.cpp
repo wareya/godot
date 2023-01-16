@@ -1,32 +1,32 @@
-/*************************************************************************/
-/*  os.cpp                                                               */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  os.cpp                                                                */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "os.h"
 
@@ -39,6 +39,7 @@
 #include "servers/audio_server.h"
 
 #include <stdarg.h>
+#include <thread>
 
 OS *OS::singleton = nullptr;
 uint64_t OS::target_ticks = 0;
@@ -86,10 +87,9 @@ uint64_t OS::get_system_time_secs() const {
 uint64_t OS::get_system_time_msecs() const {
 	return 0;
 }
-void OS::debug_break(){
-
-	// something
-};
+double OS::get_subsecond_unix_time() const {
+	return 0.0;
+}
 
 void OS::_set_logger(CompositeLogger *p_logger) {
 	if (_logger) {
@@ -146,6 +146,10 @@ bool OS::is_in_low_processor_usage_mode() const {
 	return low_processor_usage_mode;
 }
 
+void OS::set_update_vital_only(bool p_enabled) {
+	_update_vital_only = p_enabled;
+}
+
 void OS::set_low_processor_usage_mode_sleep_usec(int p_usec) {
 	low_processor_usage_mode_sleep_usec = p_usec;
 }
@@ -166,6 +170,14 @@ bool OS::has_clipboard() const {
 	return !get_clipboard().empty();
 }
 
+void OS::set_clipboard_primary(const String &p_text) {
+	_primary_clipboard = p_text;
+}
+
+String OS::get_clipboard_primary() const {
+	return _primary_clipboard;
+}
+
 String OS::get_executable_path() const {
 	return _execpath;
 }
@@ -173,10 +185,6 @@ String OS::get_executable_path() const {
 int OS::get_process_id() const {
 	return -1;
 };
-
-void OS::vibrate_handheld(int p_duration_ms) {
-	WARN_PRINT("vibrate_handheld() only works with Android and iOS");
-}
 
 bool OS::is_stdout_verbose() const {
 	return _verbose_stdout;
@@ -210,7 +218,7 @@ bool OS::has_virtual_keyboard() const {
 	return false;
 }
 
-void OS::show_virtual_keyboard(const String &p_existing_text, const Rect2 &p_screen_rect, bool p_multiline, int p_max_input_length, int p_cursor_start, int p_cursor_end) {
+void OS::show_virtual_keyboard(const String &p_existing_text, const Rect2 &p_screen_rect, VirtualKeyboardType p_type, int p_max_input_length, int p_cursor_start, int p_cursor_end) {
 }
 
 void OS::hide_virtual_keyboard() {
@@ -291,6 +299,11 @@ String OS::get_locale() const {
 // `get_locale()` in a way that's consistent for all platforms.
 String OS::get_locale_language() const {
 	return get_locale().left(3).replace("_", "");
+}
+
+// Embedded PCK offset.
+uint64_t OS::get_embedded_pck_offset() const {
+	return 0;
 }
 
 // Helper function to ensure that a dir name/path will be valid on the OS
@@ -505,7 +518,11 @@ String OS::get_unique_id() const {
 }
 
 int OS::get_processor_count() const {
-	return 1;
+	return std::thread::hardware_concurrency();
+}
+
+String OS::get_processor_name() const {
+	return "";
 }
 
 Error OS::native_video_play(String p_path, float p_volume, String p_audio_track, String p_subtitle_track) {
@@ -534,6 +551,75 @@ bool OS::can_use_threads() const {
 #else
 	return true;
 #endif
+}
+
+bool OS::tts_is_speaking() const {
+	WARN_PRINT("TTS is not supported by this platform.");
+	return false;
+}
+
+bool OS::tts_is_paused() const {
+	WARN_PRINT("TTS is not supported by this platform.");
+	return false;
+}
+
+void OS::tts_pause() {
+	WARN_PRINT("TTS is not supported by this platformr.");
+}
+
+void OS::tts_resume() {
+	WARN_PRINT("TTS is not supported by this platform.");
+}
+
+Array OS::tts_get_voices() const {
+	WARN_PRINT("TTS is not supported by this platform.");
+	return Array();
+}
+
+PoolStringArray OS::tts_get_voices_for_language(const String &p_language) const {
+	PoolStringArray ret;
+	Array voices = tts_get_voices();
+	for (int i = 0; i < voices.size(); i++) {
+		const Dictionary &voice = voices[i];
+		if (voice.has("id") && voice.has("language") && voice["language"].operator String().begins_with(p_language)) {
+			ret.push_back(voice["id"]);
+		}
+	}
+	return ret;
+}
+
+void OS::tts_speak(const String &p_text, const String &p_voice, int p_volume, float p_pitch, float p_rate, int p_utterance_id, bool p_interrupt) {
+	WARN_PRINT("TTS is not supported by this platform.");
+}
+
+void OS::tts_stop() {
+	WARN_PRINT("TTS is not supported by this platform.");
+}
+
+void OS::tts_set_utterance_callback(TTSUtteranceEvent p_event, Object *p_object, const StringName &p_callback) {
+	ERR_FAIL_INDEX(p_event, OS::TTS_UTTERANCE_MAX);
+	utterance_callback[p_event].object = p_object;
+	utterance_callback[p_event].cb_name = p_callback;
+}
+
+void OS::tts_post_utterance_event(TTSUtteranceEvent p_event, int p_id, int p_pos) {
+	ERR_FAIL_INDEX(p_event, OS::TTS_UTTERANCE_MAX);
+	switch (p_event) {
+		case OS::TTS_UTTERANCE_STARTED:
+		case OS::TTS_UTTERANCE_ENDED:
+		case OS::TTS_UTTERANCE_CANCELED: {
+			if (utterance_callback[p_event].object != nullptr) {
+				utterance_callback[p_event].object->call_deferred(utterance_callback[p_event].cb_name, p_id);
+			}
+		} break;
+		case OS::TTS_UTTERANCE_BOUNDARY: {
+			if (utterance_callback[p_event].object != nullptr) {
+				utterance_callback[p_event].object->call_deferred(utterance_callback[p_event].cb_name, p_pos, p_id);
+			}
+		} break;
+		default:
+			break;
+	}
 }
 
 OS::MouseMode OS::get_mouse_mode() const {
@@ -647,19 +733,25 @@ bool OS::has_feature(const String &p_feature) {
 	if (sizeof(void *) == 4 && p_feature == "32") {
 		return true;
 	}
-#if defined(__x86_64) || defined(__x86_64__) || defined(__amd64__)
+#if defined(__x86_64) || defined(__x86_64__) || defined(__amd64__) || defined(_M_X64)
 	if (p_feature == "x86_64") {
 		return true;
 	}
-#elif (defined(__i386) || defined(__i386__))
+#elif defined(__i386) || defined(__i386__) || defined(_M_IX86)
+	if (p_feature == "x86_32") {
+		return true;
+	}
 	if (p_feature == "x86") {
 		return true;
 	}
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(_M_ARM64)
 	if (p_feature == "arm64") {
 		return true;
 	}
-#elif defined(__arm__)
+#elif defined(__arm__) || defined(_M_ARM)
+	if (p_feature == "arm32") {
+		return true;
+	}
 #if defined(__ARM_ARCH_7A__)
 	if (p_feature == "armv7a" || p_feature == "armv7") {
 		return true;
@@ -689,6 +781,19 @@ bool OS::has_feature(const String &p_feature) {
 	}
 #endif
 	if (p_feature == "ppc") {
+		return true;
+	}
+#elif defined(__wasm__)
+#if defined(__wasm64__)
+	if (p_feature == "wasm64") {
+		return true;
+	}
+#elif defined(__wasm32__)
+	if (p_feature == "wasm32") {
+		return true;
+	}
+#endif
+	if (p_feature == "wasm") {
 		return true;
 	}
 #endif
@@ -834,6 +939,8 @@ OS::OS() {
 	_keep_screen_on = true; // set default value to true, because this had been true before godot 2.0.
 	low_processor_usage_mode = false;
 	low_processor_usage_mode_sleep_usec = 10000;
+	_update_vital_only = false;
+	_update_pending = false;
 	_verbose_stdout = false;
 	_debug_stdout = false;
 	_no_window = false;

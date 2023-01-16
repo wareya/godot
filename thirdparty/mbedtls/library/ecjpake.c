@@ -435,7 +435,7 @@ cleanup:
 
 /*
  * Read a ECJPAKEKeyKPPairList (7.4.2.3) and check proofs
- * Ouputs: verified peer public keys Xa, Xb
+ * Outputs: verified peer public keys Xa, Xb
  */
 static int ecjpake_kkpp_read( const mbedtls_md_info_t *md_info,
                               const mbedtls_ecp_group *grp,
@@ -794,12 +794,7 @@ cleanup:
 
 #if defined(MBEDTLS_SELF_TEST)
 
-#if defined(MBEDTLS_PLATFORM_C)
 #include "mbedtls/platform.h"
-#else
-#include <stdio.h>
-#define mbedtls_printf     printf
-#endif
 
 #if !defined(MBEDTLS_ECP_DP_SECP256R1_ENABLED) || \
     !defined(MBEDTLS_SHA256_C)

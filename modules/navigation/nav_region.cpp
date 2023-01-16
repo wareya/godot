@@ -1,49 +1,51 @@
-/*************************************************************************/
-/*  nav_region.cpp                                                       */
-/*************************************************************************/
-/*                       This file is part of:                           */
-/*                           GODOT ENGINE                                */
-/*                      https://godotengine.org                          */
-/*************************************************************************/
-/* Copyright (c) 2007-2022 Juan Linietsky, Ariel Manzur.                 */
-/* Copyright (c) 2014-2022 Godot Engine contributors (cf. AUTHORS.md).   */
-/*                                                                       */
-/* Permission is hereby granted, free of charge, to any person obtaining */
-/* a copy of this software and associated documentation files (the       */
-/* "Software"), to deal in the Software without restriction, including   */
-/* without limitation the rights to use, copy, modify, merge, publish,   */
-/* distribute, sublicense, and/or sell copies of the Software, and to    */
-/* permit persons to whom the Software is furnished to do so, subject to */
-/* the following conditions:                                             */
-/*                                                                       */
-/* The above copyright notice and this permission notice shall be        */
-/* included in all copies or substantial portions of the Software.       */
-/*                                                                       */
-/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,       */
-/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF    */
-/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.*/
-/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY  */
-/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,  */
-/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE     */
-/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                */
-/*************************************************************************/
+/**************************************************************************/
+/*  nav_region.cpp                                                        */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
 
 #include "nav_region.h"
 
 #include "nav_map.h"
 
-/**
-	@author AndreaCatania
-*/
-
-NavRegion::NavRegion() :
-		map(NULL),
-		polygons_dirty(true) {
-}
-
 void NavRegion::set_map(NavMap *p_map) {
 	map = p_map;
 	polygons_dirty = true;
+	if (!map) {
+		connections.clear();
+	}
+}
+
+void NavRegion::set_navigation_layers(uint32_t p_navigation_layers) {
+	navigation_layers = p_navigation_layers;
+}
+
+uint32_t NavRegion::get_navigation_layers() const {
+	return navigation_layers;
 }
 
 void NavRegion::set_transform(Transform p_transform) {
@@ -54,6 +56,25 @@ void NavRegion::set_transform(Transform p_transform) {
 void NavRegion::set_mesh(Ref<NavigationMesh> p_mesh) {
 	mesh = p_mesh;
 	polygons_dirty = true;
+}
+
+int NavRegion::get_connections_count() const {
+	if (!map) {
+		return 0;
+	}
+	return connections.size();
+}
+
+Vector3 NavRegion::get_connection_pathway_start(int p_connection_id) const {
+	ERR_FAIL_COND_V(!map, Vector3());
+	ERR_FAIL_INDEX_V(p_connection_id, connections.size(), Vector3());
+	return connections[p_connection_id].pathway_start;
+}
+
+Vector3 NavRegion::get_connection_pathway_end(int p_connection_id) const {
+	ERR_FAIL_COND_V(!map, Vector3());
+	ERR_FAIL_INDEX_V(p_connection_id, connections.size(), Vector3());
+	return connections[p_connection_id].pathway_end;
 }
 
 bool NavRegion::sync() {
@@ -71,17 +92,19 @@ void NavRegion::update_polygons() {
 	polygons.clear();
 	polygons_dirty = false;
 
-	if (map == NULL) {
+	if (map == nullptr) {
 		return;
 	}
 
-	if (mesh.is_null())
+	if (mesh.is_null()) {
 		return;
+	}
 
 	PoolVector<Vector3> vertices = mesh->get_vertices();
 	int len = vertices.size();
-	if (len == 0)
+	if (len == 0) {
 		return;
+	}
 
 	PoolVector<Vector3>::Read vertices_r = vertices.read();
 
@@ -132,3 +155,7 @@ void NavRegion::update_polygons() {
 		}
 	}
 }
+
+NavRegion::NavRegion() {}
+
+NavRegion::~NavRegion() {}
