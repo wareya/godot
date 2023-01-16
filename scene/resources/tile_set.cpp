@@ -31,9 +31,6 @@
 #include "tile_set.h"
 #include "core/array.h"
 #include "core/engine.h"
-#include "core/pair.h"
-#include "core/sort_array.h"
-#include "core/vector.h"
 
 bool TileSet::_set(const StringName &p_name, const Variant &p_value) {
 	String n = p_name;
@@ -613,54 +610,53 @@ List<Vector2> TileSet::_autotile_get_subtile_candidates_for_bitmask(int p_id, ui
 	return coords;
 }
 
-struct _BitcountSorter {
-	uint32_t bitmask = 0;
-	bool operator()(const uint32_t &a, const uint32_t &b) const {
-		int32_t difference = int32_t(bitcount(a, false)) - int32_t(bitcount(b, false));
-		if (difference != 0) {
-			// if bitmasks have different "distance" score, sort accordingly
-			return difference < 0;
-		} else {
-			// if same, pick one with more enabled bits
-			return bitcount(a, true) > bitcount(b, true);
+uint32_t _count_bitmask_bits(uint32_t bitmask) {
+	uint32_t ret = 0;
+
+	for (uint32_t i = 1; i <= 256; i <<= 1) {
+		if (bitmask & i) {
+			ret++;
 		}
 	}
-	uint32_t bitcount(uint32_t x, bool raw) const {
-		uint32_t ret = 0;
-		if (!raw) {
-			x ^= bitmask;
-		}
-		for (uint32_t i = 1; i <= 256; i <<= 1) {
-			if (x & i) {
-				ret++;
-				// make axial edges have double the influence, but only during the difference test
-				if (!raw && i & (TileSet::BIND_TOP | TileSet::BIND_LEFT | TileSet::BIND_RIGHT | TileSet::BIND_BOTTOM)) {
-					ret++;
-				}
+
+	return ret;
+}
+uint32_t _score_bitmask_difference(uint32_t bitmask, uint32_t ref_bitmask) {
+	// low = less difference, high = more difference
+	uint32_t ret = 0;
+
+	bitmask ^= ref_bitmask;
+	// add one to the score for each non-matching bit
+	for (uint32_t i = 1; i <= 256; i <<= 1) {
+		if (bitmask & i) {
+			ret += 1;
+			// make axial edge mismatches cost four times as much
+			if (i & (TileSet::BIND_TOP | TileSet::BIND_LEFT | TileSet::BIND_RIGHT | TileSet::BIND_BOTTOM)) {
+				ret += 3;
 			}
 		}
-		x ^= bitmask;
-		// artificially inflate score (reduce distance) for all-filled and all-but-center-empty bitmasks
-		// (511 is the non-IGNORE bitmasks all or'd together)
-		if (!raw && ret > 0 && (x == 511 || x == TileSet::BIND_CENTER)) {
-			ret--;
-		}
-		// artificially deflate score (increase distance) for non-symmetric bitmasks if testing against all-filled or all-but-center-empty bitmask
-		// (need to cast the bit tests from int to bool before comparing)
-		if (!raw && (bitmask == 511 || bitmask == TileSet::BIND_CENTER) &&
-				(bool(x & TileSet::BIND_LEFT) != bool(x & TileSet::BIND_RIGHT) ||
-						bool(x & TileSet::BIND_TOP) != bool(x & TileSet::BIND_BOTTOM) ||
-						bool(x & TileSet::BIND_TOPRIGHT) != bool(x & TileSet::BIND_BOTTOMLEFT) ||
-						bool(x & TileSet::BIND_TOPLEFT) != bool(x & TileSet::BIND_BOTTOMRIGHT))) {
-			ret += 16;
-		}
-		return ret;
 	}
-};
+	bitmask ^= ref_bitmask;
+	// artificially reduce difference for all-filled and all-but-center-empty bitmasks
+	// (511 is the non-IGNORE bitmasks all or'd together; 0x1FF)
+	if (ret > 0 && (bitmask == 511 || bitmask == TileSet::BIND_CENTER)) {
+		ret -= 1;
+	}
+	// artificially increase difference for non-symmetric bitmasks if testing against all-filled or all-but-center-empty bitmask
+	// (need to cast the bit tests from int to bool before comparing)
+	if ((ref_bitmask == 511 || ref_bitmask == TileSet::BIND_CENTER) &&
+			(bool(bitmask & TileSet::BIND_LEFT) != bool(bitmask & TileSet::BIND_RIGHT) ||
+					bool(bitmask & TileSet::BIND_TOP) != bool(bitmask & TileSet::BIND_BOTTOM) ||
+					bool(bitmask & TileSet::BIND_TOPRIGHT) != bool(bitmask & TileSet::BIND_BOTTOMLEFT) ||
+					bool(bitmask & TileSet::BIND_TOPLEFT) != bool(bitmask & TileSet::BIND_BOTTOMRIGHT))) {
+		ret += 16;
+	}
+	return ret;
+}
 
 Vector2 TileSet::autotile_get_subtile_for_bitmask(int p_id, uint16_t p_bitmask, const Node *p_tilemap_node, const Vector2 &p_tile_location) {
 	ERR_FAIL_COND_V_MSG(!tile_map.has(p_id), Vector2(), vformat("The TileSet doesn't have a tile with ID '%d'.", p_id));
-	//First try to forward selection to script
+	// First try to forward selection to script
 	if (p_tilemap_node->get_class_name() == "TileMap") {
 		if (get_script_instance() != nullptr) {
 			if (get_script_instance()->has_method("_forward_subtile_selection")) {
@@ -672,32 +668,42 @@ Vector2 TileSet::autotile_get_subtile_for_bitmask(int p_id, uint16_t p_bitmask, 
 		}
 	}
 
+	// if no forward-selected tile, look for a matching tile
 	List<Vector2> coords = _autotile_get_subtile_candidates_for_bitmask(p_id, p_bitmask);
 
 	// if we didn't find anything, try falling back to a tile with a similar bitmask instead of the default tile
 	if (coords.size() == 0) {
-		// build list of possibilities (second half of pair is a dummy value to smuggle p_bitmask into the sorting comparator)
-		Vector<uint32_t> possibilities;
-		possibilities.push_back(BIND_CENTER);
-		uint32_t edges[] = { BIND_TOPLEFT, BIND_TOPRIGHT, BIND_BOTTOMLEFT, BIND_BOTTOMRIGHT, BIND_TOP, BIND_LEFT, BIND_RIGHT, BIND_BOTTOM };
-		for (uint32_t edge : edges) {
-			int num = possibilities.size();
-			for (int i = 0; i < num; ++i) {
-				possibilities.push_back(possibilities[i] | edge);
-			}
-		}
-		// get most similar/desirable possibilities first
-		SortArray<uint32_t, _BitcountSorter> sorter;
-		sorter.compare.bitmask = p_bitmask;
-		sorter.insertion_sort(0, possibilities.size(), possibilities.ptrw());
+		uint32_t best_match_cost = 100000; // main point of comparison, general difference between bitmasks
+		uint32_t best_match_bitcount = 0; // bit count, as a tie breaker
+		uint16_t best_match_bitmask = 0;
 
-		// search sorted list of possibilities for first (and thus most) similar valid bitmask
-		for (int i = 0; i < possibilities.size(); ++i) {
-			coords = _autotile_get_subtile_candidates_for_bitmask(p_id, possibilities[i]);
-			if (coords.size() != 0) {
-				break;
+		for (Map<Vector2, uint32_t>::Element *E = tile_map[p_id].autotile_data.flags.front(); E; E = E->next()) {
+			uint32_t mask = E->get();
+			if (tile_map[p_id].autotile_data.bitmask_mode == BITMASK_2X2) {
+				mask |= (BIND_IGNORE_TOP | BIND_IGNORE_LEFT | BIND_IGNORE_CENTER | BIND_IGNORE_RIGHT | BIND_IGNORE_BOTTOM);
+			}
+
+			uint16_t mask_ignore = mask >> 16;
+			uint16_t mask_low = mask & 0xFFFF;
+			mask_low &= ~mask_ignore;
+			mask_low |= p_bitmask & mask_ignore;
+
+			// always skip bitmasks with no center bit, or that have already been matched as the best
+			if ((mask_low & BIND_CENTER) == 0 || mask_low == best_match_bitmask) {
+				continue;
+			}
+
+			uint32_t cost = _score_bitmask_difference(mask_low, p_bitmask);
+			uint32_t bitcount = _count_bitmask_bits(mask_low); // to break ties, pick the bitmask with more set bits
+
+			// if more similar, confirm match
+			if (cost < best_match_cost || (cost == best_match_cost && bitcount > best_match_bitcount)) {
+				best_match_cost = cost;
+				best_match_bitcount = bitcount;
+				best_match_bitmask = mask_low;
 			}
 		}
+		coords = _autotile_get_subtile_candidates_for_bitmask(p_id, best_match_bitmask);
 	}
 
 	if (coords.size() == 0) {
